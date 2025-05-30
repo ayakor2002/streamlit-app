@@ -39,7 +39,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# CSS personnalisé (conservé identique)
+# CSS personnalisé
 st.markdown("""
 <style>
     .main-header {
@@ -616,7 +616,7 @@ def create_scenarios_comparison(scenarios, scenario_names=None):
 def create_planning_dashboard(results, references, scenarios):
     """Crée un dashboard pour le choix du meilleur scénario"""
     if not results or 'production' not in results:
-        return None
+        return None, None
     
     S = len(scenarios)
     
@@ -697,890 +697,6 @@ def create_planning_dashboard(results, references, scenarios):
     return fig, df_metrics
 
 # =====================================================================
-# INTERFACE STREAMLIT PRINCIPALE
-# =====================================================================
-
-def main():
-    # En-tête
-    st.markdown("""
-    <div class="main-header">
-        <h1>🏭 Système Intégré avec Prédictions et Planification Réelles</h1>
-        <p>Machine Learning + Optimisation + Dashboard Intelligent</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # Initialisation
-    if 'prediction_system' not in st.session_state:
-        st.session_state.prediction_system = RealPredictionSystem()
-        st.session_state.models_trained = False
-        st.session_state.planning_results = None
-
-    # Navigation
-    st.sidebar.title("🧭 Navigation")
-    page = st.sidebar.selectbox(
-        "Choisissez une section:",
-        [
-            "🏠 Accueil",
-            "📁 Chargement & Entraînement", 
-            "📝 Nouvelle Demande & Prédiction",
-            "🎯 Planification Intelligente",
-            "📊 Dashboard & Comparaison",
-            "📈 Historique & Performance"
-        ]
-    )
-
-    # =================== PAGE ACCUEIL ===================
-    if page == "🏠 Accueil":
-        st.header("🏠 Bienvenue dans le Système Complet")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("""
-            ### 🎯 Fonctionnalités Principales
-            
-            **🤖 Prédictions ML Réelles:**
-            - Entraînement de modèles RandomForest, GradientBoosting, DecisionTree
-            - Sélection automatique du meilleur modèle par poste
-            - Affichage des paramètres et performances
-            
-            **📊 Nouvelle Demande Intégrée:**
-            - Prédiction basée sur jour et volume
-            - Calcul du taux de rework
-            - Intégration à l'historique
-            
-            **🎯 Planification Optimale:**
-            - Génération de scénarios intelligents
-            - Combinaison historique + nouvelle demande
-            - Optimisation avec contraintes réelles
-            """)
-        
-        with col2:
-            st.markdown("""
-            ### 📋 Statut du Système
-            """)
-            
-            # Statut des modèles
-            if st.session_state.models_trained:
-                st.success("✅ Modèles Entraînés")
-                model_summary = st.session_state.prediction_system.get_model_summary()
-                if model_summary:
-                    st.write(f"**Postes:** {len(model_summary)}")
-                    avg_r2 = np.mean([info['r2_score'] for info in model_summary.values()])
-                    st.write(f"**R² Moyen:** {avg_r2:.3f}")
-            else:
-                st.warning("⏳ Modèles non entraînés")
-            
-            # Statut historique
-            hist_count = len(st.session_state.prediction_system.predictions_history)
-            if hist_count > 0:
-                st.info(f"📊 {hist_count} prédictions en historique")
-            else:
-                st.warning("📭 Aucun historique")
-            
-            # Statut planification
-            if st.session_state.planning_results:
-                st.success("✅ Planification configurée")
-            else:
-                st.warning("⏳ Planification à faire")
-
-    # =================== CHARGEMENT & ENTRAÎNEMENT ===================
-    elif page == "📁 Chargement & Entraînement":
-        st.header("📁 Chargement des Données et Entraînement des Modèles")
-        
-        st.markdown("### 📂 Étape 1: Chargement du Fichier Excel")
-        
-        uploaded_file = st.file_uploader(
-            "Téléchargez votre fichier Excel",
-            type=['xlsx', 'xls'],
-            help="Le fichier doit contenir: Jour, Volume_production, et colonnes de défauts par poste"
-        )
-        
-        if uploaded_file is not None:
-            try:
-                # Charger les données
-                data = pd.read_excel(uploaded_file)
-                st.success("✅ Fichier chargé avec succès!")
-                
-                # Aperçu des données
-                st.markdown("### 👀 Aperçu des Données")
-                st.dataframe(data.head(10))
-                
-                # Informations sur les données
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Nombre de lignes", len(data))
-                with col2:
-                    st.metric("Nombre de colonnes", len(data.columns))
-                with col3:
-                    st.metric("Colonnes détectées", ", ".join(data.columns[:3]) + "...")
-                
-                # Préparer les données
-                if st.button("🔧 Préparer les Données"):
-                    with st.spinner("Préparation des données..."):
-                        try:
-                            success = st.session_state.prediction_system.load_and_prepare_data(data)
-                            if success:
-                                st.success("✅ Données préparées!")
-                                
-                                # Afficher les informations extraites
-                                pred_sys = st.session_state.prediction_system
-                                
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    st.markdown("**Colonnes identifiées:**")
-                                    st.write(f"• Jour: {pred_sys.jour_col}")
-                                    st.write(f"• Volume: {pred_sys.volume_col}")
-                                
-                                with col2:
-                                    st.markdown("**Postes détectés:**")
-                                    for poste in pred_sys.postes:
-                                        st.write(f"• {poste}")
-                                
-                                # Poids calculés
-                                st.markdown("**Poids des postes (basés sur moyenne défauts):**")
-                                weights_df = pd.DataFrame([
-                                    {"Poste": poste, "Poids": f"{weight:.1%}", "Poids_Num": weight}
-                                    for poste, weight in pred_sys.poste_weights.items()
-                                ])
-                                st.dataframe(weights_df[["Poste", "Poids"]], hide_index=True)
-                        
-                        except Exception as e:
-                            st.error(f"❌ Erreur: {e}")
-                
-                # Entraînement des modèles
-                if hasattr(st.session_state.prediction_system, 'postes') and st.session_state.prediction_system.postes:
-                    st.markdown("### 🤖 Étape 2: Entraînement des Modèles ML")
-                    
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        test_size = st.slider("Taille du jeu de test (%)", 10, 40, 20) / 100
-                    
-                    with col2:
-                        models_to_use = st.multiselect(
-                            "Modèles à tester:",
-                            ["RandomForest", "GradientBoosting", "DecisionTree", "LinearRegression"],
-                            default=["RandomForest", "GradientBoosting", "DecisionTree"]
-                        )
-                    
-                    if st.button("🚀 Entraîner les Modèles", type="primary"):
-                        if not models_to_use:
-                            st.error("Sélectionnez au moins un modèle!")
-                        else:
-                            with st.spinner("Entraînement en cours... Cela peut prendre quelques minutes."):
-                                
-                                # Créer le dictionnaire des modèles
-                                models_dict = {}
-                                if "RandomForest" in models_to_use:
-                                    models_dict["RandomForest"] = RandomForestRegressor(n_estimators=100, random_state=42)
-                                if "GradientBoosting" in models_to_use:
-                                    models_dict["GradientBoosting"] = GradientBoostingRegressor(n_estimators=100, random_state=42)
-                                if "DecisionTree" in models_to_use:
-                                    models_dict["DecisionTree"] = DecisionTreeRegressor(random_state=42)
-                                if "LinearRegression" in models_to_use:
-                                    models_dict["LinearRegression"] = LinearRegression()
-                                
-                                try:
-                                    results = st.session_state.prediction_system.train_models(
-                                        test_size=test_size, 
-                                        models_to_try=models_dict
-                                    )
-                                    
-                                    if results:
-                                        st.session_state.models_trained = True
-                                        st.success("✅ Modèles entraînés avec succès!")
-                                        
-                                        # Afficher les résultats
-                                        st.markdown("### 📊 Résultats de l'Entraînement")
-                                        
-                                        for poste, result in results.items():
-                                            with st.expander(f"📋 Détails pour {poste}"):
-                                                st.markdown(f"**Meilleur modèle:** {result['model']}")
-                                                st.markdown(f"**Score R²:** {result['r2']:.4f}")
-                                                
-                                                # Tableau des performances de tous les modèles
-                                                perf_data = []
-                                                for model_name, metrics in result['details'].items():
-                                                    perf_data.append({
-                                                        'Modèle': model_name,
-                                                        'R²': f"{metrics['r2']:.4f}",
-                                                        'RMSE': f"{metrics['rmse']:.2f}",
-                                                        'MAE': f"{metrics['mae']:.2f}"
-                                                    })
-                                                
-                                                st.dataframe(pd.DataFrame(perf_data), hide_index=True)
-                                        
-                                        # Graphique de performance
-                                        model_summary = st.session_state.prediction_system.get_model_summary()
-                                        if model_summary:
-                                            perf_chart = create_model_performance_chart(model_summary)
-                                            if perf_chart:
-                                                st.plotly_chart(perf_chart, use_container_width=True)
-                                    
-                                    else:
-                                        st.error("❌ Échec de l'entraînement des modèles")
-                                
-                                except Exception as e:
-                                    st.error(f"❌ Erreur pendant l'entraînement: {e}")
-            
-            except Exception as e:
-                st.error(f"❌ Erreur lors du chargement du fichier: {e}")
-        
-        else:
-            st.info("📁 Veuillez télécharger un fichier Excel pour commencer")
-
-    # =================== NOUVELLE DEMANDE & PRÉDICTION ===================
-    elif page == "📝 Nouvelle Demande & Prédiction":
-        st.header("📝 Nouvelle Demande et Prédiction")
-        
-        if not st.session_state.models_trained:
-            st.warning("⚠️ Veuillez d'abord entraîner les modèles dans la section 'Chargement & Entraînement'")
-            return
-        
-        st.markdown("### 📋 Paramètres de la Nouvelle Demande")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            jour = st.selectbox(
-                "Jour de la semaine:",
-                options=list(range(1, 8)),
-                format_func=lambda x: ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'][x-1]
-            )
-        
-        with col2:
-            volume = st.number_input(
-                "Volume de production prévu:",
-                min_value=100,
-                max_value=5000,
-                value=1200,
-                step=50
-            )
-        
-        method = st.selectbox(
-            "Méthode de calcul du taux global:",
-            options=['moyenne_ponderee', 'moyenne', 'max', 'somme'],
-            format_func=lambda x: {
-                'moyenne_ponderee': '⚖️ Moyenne Pondérée (Recommandé)',
-                'moyenne': '📊 Moyenne Simple',
-                'max': '🔺 Maximum',
-                'somme': '➕ Somme'
-            }[x]
-        )
-        
-        # Option validation
-        with_validation = st.checkbox("🔍 J'ai les défauts réels pour validation")
-        
-        actual_defects = None
-        if with_validation:
-            st.markdown("### 📊 Défauts Réels (pour validation)")
-            pred_sys = st.session_state.prediction_system
-            
-            actual_defects = {}
-            cols = st.columns(len(pred_sys.postes))
-            
-            for i, poste in enumerate(pred_sys.postes):
-                with cols[i]:
-                    actual_defects[poste] = st.number_input(
-                        f"Défauts {poste.replace('_defauts', '')}:", 
-                        min_value=0.0, 
-                        value=0.0, 
-                        step=0.1
-                    )
-        
-        if st.button("🔮 Faire la Prédiction", type="primary"):
-            with st.spinner("Prédiction en cours..."):
-                try:
-                    # Ajouter à l'historique et faire la prédiction
-                    result = st.session_state.prediction_system.add_prediction_to_history(
-                        jour=jour,
-                        volume=volume,
-                        method=method,
-                        actual_defects=actual_defects
-                    )
-                    
-                    # Afficher les résultats
-                    st.markdown("### 🎯 Résultats de la Prédiction")
-                    
-                    # Métriques principales
-                    prediction = result['prediction']
-                    
-                    col1, col2, col3, col4 = st.columns(4)
-                    
-                    with col1:
-                        st.metric(
-                            "🎯 Taux Final de Rework",
-                            f"{result['taux_final']:.2f}%"
-                        )
-                    
-                    with col2:
-                        taux_ml = prediction['taux_rework_chaine'][method]
-                        st.metric(
-                            "🤖 Taux ML Brut",
-                            f"{taux_ml:.2f}%"
-                        )
-                    
-                    with col3:
-                        total_defauts = sum(prediction['predictions_postes'].values())
-                        st.metric(
-                            "📊 Défauts Total Prédits",
-                            f"{total_defauts:.1f}"
-                        )
-                    
-                    with col4:
-                        if result.get('accuracy') is not None:
-                            st.metric(
-                                "✅ Précision",
-                                f"{result['accuracy']:.1f}%"
-                            )
-                        else:
-                            st.metric("✅ Précision", "N/A")
-                    
-                    # Détails par poste avec modèles utilisés
-                    st.markdown("### 🏭 Détails par Poste")
-                    
-                    model_summary = st.session_state.prediction_system.get_model_summary()
-                    
-                    poste_details = []
-                    for poste in st.session_state.prediction_system.postes:
-                        defauts_pred = prediction['predictions_postes'][poste]
-                        taux_poste = prediction['taux_rework_postes'][poste]
-                        model_info = model_summary.get(poste, {})
-                        
-                        detail = {
-                            'Poste': poste.replace('_defauts', ''),
-                            'Modèle Utilisé': model_info.get('model', 'N/A'),
-                            'Score R²': f"{model_info.get('r2_score', 0):.3f}",
-                            'Défauts Prédits': f"{defauts_pred:.1f}",
-                            'Taux Rework (%)': f"{taux_poste:.2f}",
-                            'Poids': f"{model_info.get('weight', 0):.1%}",
-                            'Défauts Réels': f"{actual_defects.get(poste, 'N/A')}" if actual_defects else "N/A"
-                        }
-                        poste_details.append(detail)
-                    
-                    st.dataframe(pd.DataFrame(poste_details), hide_index=True, use_container_width=True)
-                    
-                    # Feature importance si disponible
-                    pred_sys = st.session_state.prediction_system
-                    if pred_sys.feature_importances:
-                        st.markdown("### 🎯 Importance des Caractéristiques")
-                        
-                        importance_data = []
-                        for poste, importance in pred_sys.feature_importances.items():
-                            importance_data.append({
-                                'Poste': poste.replace('_defauts', ''),
-                                'Importance Volume': f"{importance.get('Volume', 0):.3f}",
-                                'Importance Jour': f"{importance.get('Jour', 0):.3f}"
-                            })
-                        
-                        st.dataframe(pd.DataFrame(importance_data), hide_index=True)
-                    
-                    # Comparaison des méthodes
-                    st.markdown("### 📊 Comparaison des Méthodes de Calcul")
-                    
-                    methodes_comp = []
-                    for meth, taux in prediction['taux_rework_chaine'].items():
-                        methodes_comp.append({
-                            'Méthode': meth.replace('_', ' ').title(),
-                            'Taux Rework (%)': f"{taux:.2f}",
-                            'Défauts Estimés': f"{prediction['predictions_chaine'][meth]:.1f}",
-                            'Sélectionnée': "✅" if meth == method else ""
-                        })
-                    
-                    st.dataframe(pd.DataFrame(methodes_comp), hide_index=True)
-                    
-                    st.success("✅ Prédiction ajoutée à l'historique avec succès!")
-                    
-                except Exception as e:
-                    st.error(f"❌ Erreur lors de la prédiction: {e}")
-
-    # =================== PLANIFICATION INTELLIGENTE ===================
-    elif page == "🎯 Planification Intelligente":
-        st.header("🎯 Planification Intelligente")
-        
-        pred_sys = st.session_state.prediction_system
-        
-        if not st.session_state.models_trained:
-            st.warning("⚠️ Veuillez d'abord entraîner les modèles")
-            return
-        
-        if not pred_sys.predictions_history:
-            st.warning("⚠️ Veuillez d'abord ajouter au moins une nouvelle demande")
-            return
-        
-        st.markdown("### ⚙️ Configuration de la Planification")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            n_scenarios = st.selectbox("Nombre de scénarios:", [1, 3, 5], index=1)
-            n_references = st.number_input("Nombre de références:", min_value=3, max_value=10, value=8)
-            n_shifts = st.number_input("Nombre de shifts:", min_value=1, max_value=5, value=3)
-        
-        with col2:
-            capacite_shift = st.number_input("Capacité par shift:", min_value=100, max_value=500, value=180)
-            penalite_penurie = st.number_input("Pénalité pénurie:", min_value=500, max_value=3000, value=1000)
-            cout_production = st.number_input("Coût de production unitaire:", min_value=10, max_value=50, value=20)
-        
-        # Paramètres avancés
-        with st.expander("⚙️ Paramètres Avancés"):
-            col1, col2 = st.columns(2)
-            with col1:
-                alpha_rework = st.slider("Alpha rework (efficacité reprise):", 0.0, 1.0, 0.8, 0.1)
-                beta = st.slider("Beta (facteur capacité défauts):", 1.0, 2.0, 1.2, 0.1)
-            with col2:
-                time_limit = st.number_input("Limite de temps (secondes):", min_value=30, max_value=600, value=300)
-        
-        # Informations sur la dernière prédiction
-        latest_pred = pred_sys.predictions_history[-1]
-        st.markdown("### 📊 Contexte de la Dernière Prédiction")
-        
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("Jour", ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'][latest_pred['jour']-1])
-        with col2:
-            st.metric("Volume", f"{latest_pred['volume']:,}")
-        with col3:
-            st.metric("Taux Final", f"{latest_pred['taux_final']:.2f}%")
-        with col4:
-            hist_count = len(pred_sys.predictions_history)
-            st.metric("Historique", f"{hist_count} prédictions")
-        
-        if st.button("🚀 Générer et Optimiser", type="primary"):
-            with st.spinner("Génération des scénarios et optimisation..."):
-                try:
-                    # Créer le planificateur
-                    planner = IntelligentPlanning(pred_sys)
-                    
-                    # Générer les scénarios
-                    scenarios = planner.generate_scenarios(latest_pred['taux_final'], n_scenarios)
-                    
-                    # Configuration des références et demandes
-                    references = [f'REF_{i+1:02d}' for i in range(n_references)]
-                    demandes = np.random.randint(20, 50, n_references)  # Demandes aléatoires pour la démo
-                    capacites = [capacite_shift] * n_shifts
-                    
-                    # Paramètres d'optimisation
-                    params = {
-                        'alpha_rework': alpha_rework,
-                        'beta': beta,
-                        'penalite_penurie': penalite_penurie,
-                        'cout_production': cout_production
-                    }
-                    
-                    # Configuration du problème
-                    success = planner.setup_optimization(scenarios, references, demandes, capacites, params)
-                    
-                    if success:
-                        # Résolution
-                        solved = planner.solve(time_limit)
-                        
-                        if solved:
-                            st.session_state.planning_results = planner.results
-                            st.success("✅ Optimisation réussie!")
-                            
-                            # Afficher les scénarios générés
-                            st.markdown("### 📈 Scénarios Générés")
-                            
-                            scenarios_chart = create_scenarios_comparison(scenarios)
-                            st.plotly_chart(scenarios_chart, use_container_width=True)
-                            
-                            # Informations sur les scénarios
-                            scenario_info = []
-                            scenario_names = ['Optimiste', 'Nominal', 'Pessimiste'] if n_scenarios == 3 else [f'Scénario {i+1}' for i in range(n_scenarios)]
-                            
-                            for i, (name, rate) in enumerate(zip(scenario_names, scenarios)):
-                                if len(pred_sys.predictions_history) > 1:
-                                    source = "Historique + Nouvelle demande"
-                                else:
-                                    source = "Nouvelle demande uniquement"
-                                
-                                scenario_info.append({
-                                    'Scénario': name,
-                                    'Taux Rework (%)': f"{rate:.2f}",
-                                    'Source': source,
-                                    'Probabilité': f"{100/n_scenarios:.1f}%"
-                                })
-                            
-                            st.dataframe(pd.DataFrame(scenario_info), hide_index=True)
-                            
-                            # Résultats principaux
-                            st.markdown("### 📊 Résultats d'Optimisation")
-                            
-                            col1, col2, col3 = st.columns(3)
-                            with col1:
-                                st.metric("Coût Total Optimal", f"{planner.results['cout_total']:.0f} €")
-                            with col2:
-                                st.metric("Statut", planner.results['status'])
-                            with col3:
-                                st.metric("Scénarios Analysés", len(scenarios))
-                            
-                        else:
-                            st.error("❌ Échec de l'optimisation")
-                    else:
-                        st.error("❌ Échec de la configuration")
-                
-                except Exception as e:
-                    st.error(f"❌ Erreur: {e}")
-
-    # =================== DASHBOARD & COMPARAISON ===================
-    elif page == "📊 Dashboard & Comparaison":
-        st.header("📊 Dashboard et Comparaison des Scénarios")
-        
-        if not st.session_state.planning_results:
-            st.warning("⚠️ Veuillez d'abord effectuer une planification")
-            return
-        
-        results = st.session_state.planning_results
-        pred_sys = st.session_state.prediction_system
-        
-        st.markdown("### 🎯 Dashboard de Choix du Meilleur Scénario")
-        
-        # Récupérer les informations nécessaires
-        scenarios = results['scenarios']
-        references = [f'REF_{i+1:02d}' for i in range(8)]  # Assumant 8 références par défaut
-        
-        # Créer le dashboard
-        dashboard_chart, metrics_df = create_planning_dashboard(results, references, scenarios)
-        
-        if dashboard_chart and metrics_df is not None:
-            st.plotly_chart(dashboard_chart, use_container_width=True)
-            
-            # Tableau de comparaison détaillé
-            st.markdown("### 📋 Comparaison Détaillée des Scénarios")
-            
-            # Ajouter une colonne de recommandation
-            best_scenario_idx = metrics_df['Score_Global'].idxmax()
-            metrics_df['Recommandation'] = metrics_df.apply(
-                lambda row: "⭐ RECOMMANDÉ" if row.name == best_scenario_idx else "", axis=1
-            )
-            
-            # Formatage pour l'affichage
-            display_df = metrics_df.copy()
-            display_df['Production_Totale'] = display_df['Production_Totale'].apply(lambda x: f"{x:,.0f}")
-            display_df['Penuries_Totales'] = display_df['Penuries_Totales'].apply(lambda x: f"{x:.1f}")
-            display_df['Cout_Estime'] = display_df['Cout_Estime'].apply(lambda x: f"{x:,.0f} €")
-            display_df['Score_Global'] = display_df['Score_Global'].apply(lambda x: f"{x:.1f}")
-            display_df['Taux_Rework'] = display_df['Taux_Rework'].apply(lambda x: f"{x:.2f}%")
-            
-            st.dataframe(display_df, hide_index=True, use_container_width=True)
-            
-            # Analyse et recommandations
-            st.markdown("### 💡 Analyse et Recommandations")
-            
-            best_scenario = metrics_df.iloc[best_scenario_idx]
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown(f"""
-                **🏆 Scénario Recommandé: {best_scenario['Scenario']}**
-                
-                - **Taux de Rework:** {best_scenario['Taux_Rework']:.2f}%
-                - **Score Global:** {best_scenario['Score_Global']:.1f}/100
-                - **Production Totale:** {best_scenario['Production_Totale']:,.0f} unités
-                - **Pénuries:** {best_scenario['Penuries_Totales']:.1f} unités
-                """)
-            
-            with col2:
-                # Critères de décision
-                st.markdown("**🎯 Critères de Décision:**")
-                
-                if best_scenario['Penuries_Totales'] < 10:
-                    st.success("✅ Faibles pénuries")
-                else:
-                    st.warning("⚠️ Pénuries élevées")
-                
-                if best_scenario['Taux_Rework'] < 5:
-                    st.success("✅ Taux de rework acceptable")
-                elif best_scenario['Taux_Rework'] < 10:
-                    st.warning("⚠️ Taux de rework modéré")
-                else:
-                    st.error("❌ Taux de rework élevé")
-                
-                if best_scenario['Score_Global'] > 80:
-                    st.success("✅ Score global excellent")
-                elif best_scenario['Score_Global'] > 60:
-                    st.info("ℹ️ Score global correct")
-                else:
-                    st.warning("⚠️ Score global à améliorer")
-            
-            # Actions recommandées
-            st.markdown("### 🔧 Actions Recommandées")
-            
-            actions = []
-            
-            if best_scenario['Taux_Rework'] > 8:
-                actions.append("🔍 Analyser les causes racines du taux de rework élevé")
-                actions.append("⚙️ Mettre en place des actions d'amélioration qualité")
-            
-            if best_scenario['Penuries_Totales'] > 15:
-                actions.append("📈 Augmenter la capacité de production")
-                actions.append("📋 Revoir la planification des demandes")
-            
-            if best_scenario['Cout_Estime'] > metrics_df['Cout_Estime'].mean():
-                actions.append("💰 Optimiser les coûts de production")
-                actions.append("🔄 Améliorer l'efficacité des processus")
-            
-            if not actions:
-                actions.append("✅ Configuration optimale - Maintenir les performances")
-            
-            for action in actions:
-                st.write(f"• {action}")
-        
-        else:
-            st.error("❌ Impossible de créer le dashboard")
-
-    # =================== HISTORIQUE & PERFORMANCE ===================
-    elif page == "📈 Historique & Performance":
-        st.header("📈 Historique et Analyse de Performance")
-        
-        pred_sys = st.session_state.prediction_system
-        
-        if not pred_sys.predictions_history:
-            st.info("📭 Aucun historique disponible")
-            return
-        
-        # Statistiques générales
-        st.markdown("### 📊 Statistiques Générales")
-        
-        history = pred_sys.predictions_history
-        total_predictions = len(history)
-        validated_predictions = sum(1 for p in history if p.get('accuracy') is not None)
-        
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.metric("Total Prédictions", total_predictions)
-        
-        with col2:
-            st.metric("Prédictions Validées", validated_predictions)
-        
-        with col3:
-            if validated_predictions > 0:
-                avg_accuracy = np.mean([p['accuracy'] for p in history if p.get('accuracy')])
-                st.metric("Précision Moyenne", f"{avg_accuracy:.1f}%")
-            else:
-                st.metric("Précision Moyenne", "N/A")
-        
-        with col4:
-            avg_rework = np.mean([p['taux_final'] for p in history])
-            st.metric("Taux Rework Moyen", f"{avg_rework:.2f}%")
-        
-        # Évolution temporelle
-        if total_predictions > 1:
-            st.markdown("### 📈 Évolution Temporelle")
-            
-            # Préparer les données pour le graphique
-            timestamps = [p['timestamp'] for p in history]
-            taux_finals = [p['taux_final'] for p in history]
-            accuracies = [p.get('accuracy') for p in history]
-            
-            fig = make_subplots(
-                rows=2, cols=1,
-                subplot_titles=('Évolution des Taux de Rework', 'Évolution de la Précision'),
-                vertical_spacing=0.1
-            )
-            
-            # Taux de rework
-            fig.add_trace(
-                go.Scatter(x=timestamps, y=taux_finals,
-                          mode='lines+markers',
-                          name='Taux de Rework Final',
-                          line=dict(color='blue', width=2),
-                          marker=dict(size=8)),
-                row=1, col=1
-            )
-            
-            # Précision (seulement les valeurs non nulles)
-            valid_timestamps = [t for t, a in zip(timestamps, accuracies) if a is not None]
-            valid_accuracies = [a for a in accuracies if a is not None]
-            
-            if valid_accuracies:
-                fig.add_trace(
-                    go.Scatter(x=valid_timestamps, y=valid_accuracies,
-                              mode='lines+markers',
-                              name='Précision (%)',
-                              line=dict(color='green', width=2),
-                              marker=dict(size=8)),
-                    row=2, col=1
-                )
-            
-            fig.update_layout(height=500, showlegend=True)
-            fig.update_xaxes(title_text="Temps", row=2, col=1)
-            fig.update_yaxes(title_text="Taux de Rework (%)", row=1, col=1)
-            fig.update_yaxes(title_text="Précision (%)", row=2, col=1)
-            
-            st.plotly_chart(fig, use_container_width=True)
-        
-        # Performance par jour de la semaine
-        if validated_predictions > 0:
-            st.markdown("### 📅 Performance par Jour de la Semaine")
-            
-            # Grouper par jour
-            day_stats = {}
-            day_names = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche']
-            
-            for pred in history:
-                jour = pred['jour']
-                if jour not in day_stats:
-                    day_stats[jour] = {
-                        'count': 0,
-                        'taux_rework': [],
-                        'accuracies': []
-                    }
-                
-                day_stats[jour]['count'] += 1
-                day_stats[jour]['taux_rework'].append(pred['taux_final'])
-                
-                if pred.get('accuracy') is not None:
-                    day_stats[jour]['accuracies'].append(pred['accuracy'])
-            
-            # Créer le tableau de performance
-            perf_data = []
-            for jour in range(1, 8):
-                if jour in day_stats:
-                    stats = day_stats[jour]
-                    avg_rework = np.mean(stats['taux_rework'])
-                    avg_accuracy = np.mean(stats['accuracies']) if stats['accuracies'] else None
-                    
-                    perf_data.append({
-                        'Jour': day_names[jour-1],
-                        'Nombre': stats['count'],
-                        'Taux Rework Moyen (%)': f"{avg_rework:.2f}",
-                        'Précision Moyenne (%)': f"{avg_accuracy:.1f}" if avg_accuracy else "N/A",
-                        'Écart-Type Rework': f"{np.std(stats['taux_rework']):.2f}"
-                    })
-                else:
-                    perf_data.append({
-                        'Jour': day_names[jour-1],
-                        'Nombre': 0,
-                        'Taux Rework Moyen (%)': "N/A",
-                        'Précision Moyenne (%)': "N/A",
-                        'Écart-Type Rework': "N/A"
-                    })
-            
-            st.dataframe(pd.DataFrame(perf_data), hide_index=True, use_container_width=True)
-            
-            # Graphique par jour
-            days_with_data = [d for d in perf_data if d['Nombre'] > 0]
-            if days_with_data:
-                fig_days = go.Figure()
-                
-                days = [d['Jour'] for d in days_with_data]
-                rework_rates = [float(d['Taux Rework Moyen (%)']) for d in days_with_data]
-                
-                fig_days.add_trace(
-                    go.Bar(x=days, y=rework_rates,
-                           marker_color=['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', 
-                                       '#9467bd', '#8c564b', '#e377c2'][:len(days)],
-                           text=[f'{rate:.2f}%' for rate in rework_rates],
-                           textposition='auto')
-                )
-                
-                fig_days.update_layout(
-                    title="Taux de Rework Moyen par Jour",
-                    xaxis_title="Jour de la Semaine",
-                    yaxis_title="Taux de Rework (%)",
-                    showlegend=False
-                )
-                
-                st.plotly_chart(fig_days, use_container_width=True)
-        
-        # Performance des modèles
-        if st.session_state.models_trained:
-            st.markdown("### 🤖 Performance des Modèles ML")
-            
-            model_summary = pred_sys.get_model_summary()
-            if model_summary:
-                model_perf_data = []
-                
-                for poste, info in model_summary.items():
-                    model_perf_data.append({
-                        'Poste': poste.replace('_defauts', ''),
-                        'Modèle': info['model'],
-                        'Score R²': f"{info['r2_score']:.4f}",
-                        'Poids': f"{info['weight']:.1%}",
-                        'Import. Volume': f"{info.get('feature_importance', {}).get('Volume', 0):.3f}",
-                        'Import. Jour': f"{info.get('feature_importance', {}).get('Jour', 0):.3f}"
-                    })
-                
-                st.dataframe(pd.DataFrame(model_perf_data), hide_index=True, use_container_width=True)
-                
-                # Graphique de performance des modèles
-                model_chart = create_model_performance_chart(model_summary)
-                if model_chart:
-                    st.plotly_chart(model_chart, use_container_width=True)
-        
-        # Tableau détaillé de l'historique
-        st.markdown("### 📋 Historique Détaillé")
-        
-        n_display = st.slider("Nombre d'entrées à afficher:", 5, min(20, total_predictions), 10)
-        
-        recent_history = history[-n_display:]
-        
-        display_data = []
-        for i, pred in enumerate(reversed(recent_history), 1):
-            day_name = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'][pred['jour']-1]
-            
-            display_data.append({
-                '#': total_predictions - i + 1,
-                'Date/Heure': pred['timestamp'].strftime("%Y-%m-%d %H:%M"),
-                'Jour': day_name,
-                'Volume': f"{pred['volume']:,}",
-                'Méthode': pred['method'],
-                'Taux Final (%)': f"{pred['taux_final']:.2f}",
-                'Précision (%)': f"{pred['accuracy']:.1f}" if pred.get('accuracy') else "N/A",
-                'Validé': "✅" if pred.get('actual_defects') else "❌"
-            })
-        
-        st.dataframe(pd.DataFrame(display_data), hide_index=True, use_container_width=True)
-        
-        # Export des données
-        st.markdown("### 💾 Export des Données")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            if st.button("📥 Exporter Historique CSV"):
-                csv_data = []
-                for pred in history:
-                    csv_data.append({
-                        'Timestamp': pred['timestamp'].strftime("%Y-%m-%d %H:%M:%S"),
-                        'Jour': pred['jour'],
-                        'Volume': pred['volume'],
-                        'Methode': pred['method'],
-                        'Taux_Final_%': pred['taux_final'],
-                        'Precision_%': pred.get('accuracy', ''),
-                        'Valide': pred.get('actual_defects') is not None
-                    })
-                
-                csv_df = pd.DataFrame(csv_data)
-                csv_string = csv_df.to_csv(index=False)
-                
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"historique_predictions_{timestamp}.csv"
-                
-                st.download_button(
-                    label="💾 Télécharger CSV",
-                    data=csv_string,
-                    file_name=filename,
-                    mime="text/csv"
-                )
-        
-        with col2:
-            if st.button("🧹 Nettoyer Historique"):
-                if st.session_state.get('confirm_clear', False):
-                    pred_sys.predictions_history = []
-                    pred_sys.save_history()
-                    st.session_state.confirm_clear = False
-                    st.success("✅ Historique nettoyé")
-                    st.rerun()
-                else:
-                    st.session_state.confirm_clear = True
-                    st.warning("⚠️ Cliquez à nouveau pour confirmer")
-
-# =====================================================================
 # SIDEBAR ET INFORMATIONS COMPLÉMENTAIRES
 # =====================================================================
 
@@ -1646,188 +762,885 @@ def create_sidebar_info():
         # Réinitialiser toutes les variables de session
         keys_to_reset = ['prediction_system', 'models_trained', 'planning_results']
         for key in keys_to_reset:
-            if key in st.session_state:
-                del st.session_state[key]
-        
-        # Réinitialiser le système de prédiction
-        st.session_state.prediction_system = RealPredictionSystem()
-        st.session_state.models_trained = False
-        st.session_state.planning_results = None
-        
-        st.sidebar.success("✅ Système réinitialisé")
-        st.rerun()
-    
-    # Informations techniques
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### ℹ️ Informations")
-    st.sidebar.info("""
-    **Version:** 3.0 Production
-    
-    **Fonctionnalités:**
-    - 🤖 ML réel (RF, GB, DT)
-    - 📊 Prédictions précises
-    - 🎯 Planification optimale
-    - 📈 Dashboard interactif
-    - 📁 Import/Export complet
-    """)
+           if key in st.session_state:
+               del st.session_state[key]
+       
+       # Réinitialiser le système de prédiction
+       st.session_state.prediction_system = RealPredictionSystem()
+       st.session_state.models_trained = False
+       st.session_state.planning_results = None
+       
+       st.sidebar.success("✅ Système réinitialisé")
+       st.rerun()
+   
+   # Informations techniques
+   st.sidebar.markdown("---")
+   st.sidebar.markdown("### ℹ️ Informations")
+   st.sidebar.info("""
+   **Version:** 3.0 Production
+   
+   **Fonctionnalités:**
+   - 🤖 ML réel (RF, GB, DT)
+   - 📊 Prédictions précises
+   - 🎯 Planification optimale
+   - 📈 Dashboard interactif
+   - 📁 Import/Export complet
+   """)
+
+# =====================================================================
+# INTERFACE STREAMLIT PRINCIPALE
+# =====================================================================
+
+def main():
+   # En-tête
+   st.markdown("""
+   <div class="main-header">
+       <h1>🏭 Système Intégré avec Prédictions et Planification Réelles</h1>
+       <p>Machine Learning + Optimisation + Dashboard Intelligent</p>
+   </div>
+   """, unsafe_allow_html=True)
+
+   # Initialisation sécurisée des variables de session
+   if 'prediction_system' not in st.session_state:
+       st.session_state.prediction_system = RealPredictionSystem()
+   
+   if 'models_trained' not in st.session_state:
+       st.session_state.models_trained = False
+   
+   if 'planning_results' not in st.session_state:
+       st.session_state.planning_results = None
+
+   # Navigation
+   st.sidebar.title("🧭 Navigation")
+   page = st.sidebar.selectbox(
+       "Choisissez une section:",
+       [
+           "🏠 Accueil",
+           "📁 Chargement & Entraînement", 
+           "📝 Nouvelle Demande & Prédiction",
+           "🎯 Planification Intelligente",
+           "📊 Dashboard & Comparaison",
+           "📈 Historique & Performance"
+       ]
+   )
+
+   # =================== PAGE ACCUEIL ===================
+   if page == "🏠 Accueil":
+       st.header("🏠 Bienvenue dans le Système Complet")
+       
+       col1, col2 = st.columns(2)
+       
+       with col1:
+           st.markdown("""
+           ### 🎯 Fonctionnalités Principales
+           
+           **🤖 Prédictions ML Réelles:**
+           - Entraînement de modèles RandomForest, GradientBoosting, DecisionTree
+           - Sélection automatique du meilleur modèle par poste
+           - Affichage des paramètres et performances
+           
+           **📊 Nouvelle Demande Intégrée:**
+           - Prédiction basée sur jour et volume
+           - Calcul du taux de rework
+           - Intégration à l'historique
+           
+           **🎯 Planification Optimale:**
+           - Génération de scénarios intelligents
+           - Combinaison historique + nouvelle demande
+           - Optimisation avec contraintes réelles
+           """)
+       
+       with col2:
+           st.markdown("""
+           ### 📋 Statut du Système
+           """)
+           
+           # Statut des modèles
+           if st.session_state.models_trained:
+               st.success("✅ Modèles Entraînés")
+               try:
+                   model_summary = st.session_state.prediction_system.get_model_summary()
+                   if model_summary:
+                       st.write(f"**Postes:** {len(model_summary)}")
+                       avg_r2 = np.mean([info['r2_score'] for info in model_summary.values()])
+                       st.write(f"**R² Moyen:** {avg_r2:.3f}")
+               except:
+                   pass
+           else:
+               st.warning("⏳ Modèles non entraînés")
+           
+           # Statut historique
+           try:
+               hist_count = len(st.session_state.prediction_system.predictions_history)
+               if hist_count > 0:
+                   st.info(f"📊 {hist_count} prédictions en historique")
+               else:
+                   st.warning("📭 Aucun historique")
+           except:
+               st.warning("📭 Aucun historique")
+           
+           # Statut planification
+           if st.session_state.planning_results:
+               st.success("✅ Planification configurée")
+           else:
+               st.warning("⏳ Planification à faire")
+       
+       # Démo rapide
+       st.markdown("### 🎲 Démo Rapide")
+       if st.button("🚀 Créer des Données de Démonstration"):
+           with st.spinner("Création des données de démo..."):
+               # Créer des données de démonstration
+               np.random.seed(42)
+               demo_data = []
+               
+               for i in range(100):
+                   jour = (i % 7) + 1
+                   volume = np.random.normal(1200, 200)
+                   volume = max(500, min(2000, volume))
+                   
+                   # Générer des défauts corrélés
+                   base_defect_rate = 0.02 + (jour / 100)  # Légère variation par jour
+                   poste1 = volume * (base_defect_rate + np.random.normal(0, 0.005))
+                   poste2 = volume * (base_defect_rate * 0.8 + np.random.normal(0, 0.003))
+                   poste3 = volume * (base_defect_rate * 1.2 + np.random.normal(0, 0.007))
+                   
+                   demo_data.append({
+                       'Jour': jour,
+                       'Volume_production': int(volume),
+                       'Poste1_defauts': max(0, poste1),
+                       'Poste2_defauts': max(0, poste2),
+                       'Poste3_defauts': max(0, poste3)
+                   })
+               
+               demo_df = pd.DataFrame(demo_data)
+               
+               # Sauvegarder dans session_state pour utilisation
+               st.session_state.demo_data = demo_df
+               
+               st.success("✅ Données de démo créées ! Allez dans 'Chargement & Entraînement' pour les utiliser.")
+               st.dataframe(demo_df.head())
+
+   # =================== CHARGEMENT & ENTRAÎNEMENT ===================
+   elif page == "📁 Chargement & Entraînement":
+       st.header("📁 Chargement des Données et Entraînement des Modèles")
+       
+       st.markdown("### 📂 Étape 1: Chargement du Fichier Excel")
+       
+       uploaded_file = st.file_uploader(
+           "Téléchargez votre fichier Excel",
+           type=['xlsx', 'xls'],
+           help="Le fichier doit contenir: Jour, Volume_production, et colonnes de défauts par poste"
+       )
+       
+       if uploaded_file is not None:
+           try:
+               # Charger les données
+               data = pd.read_excel(uploaded_file)
+               st.success("✅ Fichier chargé avec succès!")
+               
+               # Aperçu des données
+               st.markdown("### 👀 Aperçu des Données")
+               st.dataframe(data.head(10))
+               
+               # Informations sur les données
+               col1, col2, col3 = st.columns(3)
+               with col1:
+                   st.metric("Nombre de lignes", len(data))
+               with col2:
+                   st.metric("Nombre de colonnes", len(data.columns))
+               with col3:
+                   st.metric("Colonnes détectées", ", ".join(data.columns[:3]) + "...")
+               
+               # Bouton pour préparer automatiquement
+               if st.button("🔧 Préparer les Données"):
+                   with st.spinner("Préparation des données..."):
+                       try:
+                           success = st.session_state.prediction_system.load_and_prepare_data(data)
+                           if success:
+                               st.success("✅ Données préparées!")
+                               
+                               # Afficher les informations extraites
+                               pred_sys = st.session_state.prediction_system
+                               
+                               col1, col2 = st.columns(2)
+                               with col1:
+                                   st.markdown("**Colonnes identifiées:**")
+                                   st.write(f"• Jour: {pred_sys.jour_col}")
+                                   st.write(f"• Volume: {pred_sys.volume_col}")
+                               
+                               with col2:
+                                   st.markdown("**Postes détectés:**")
+                                   for poste in pred_sys.postes:
+                                       st.write(f"• {poste}")
+                               
+                               # Poids calculés
+                               st.markdown("**Poids des postes (basés sur moyenne défauts):**")
+                               weights_df = pd.DataFrame([
+                                   {"Poste": poste, "Poids": f"{weight:.1%}", "Poids_Num": weight}
+                                   for poste, weight in pred_sys.poste_weights.items()
+                               ])
+                               st.dataframe(weights_df[["Poste", "Poids"]], hide_index=True)
+                               
+                               # Auto-entraîner les modèles
+                               st.markdown("### 🤖 Entraînement Automatique")
+                               if st.button("🚀 Lancer l'Entraînement", type="primary"):
+                                   with st.spinner("Entraînement des modèles ML en cours..."):
+                                       models_dict = {
+                                           "RandomForest": RandomForestRegressor(n_estimators=50, random_state=42),
+                                           "GradientBoosting": GradientBoostingRegressor(n_estimators=50, random_state=42),
+                                           "DecisionTree": DecisionTreeRegressor(random_state=42)
+                                       }
+                                       
+                                       results = st.session_state.prediction_system.train_models(
+                                           test_size=0.2, 
+                                           models_to_try=models_dict
+                                       )
+                                       
+                                       if results:
+                                           st.session_state.models_trained = True
+                                           st.success("✅ Modèles entraînés avec succès!")
+                                           
+                                           # Afficher les résultats
+                                           st.markdown("### 📊 Résultats de l'Entraînement")
+                                           
+                                           for poste, result in results.items():
+                                               with st.expander(f"📋 Détails pour {poste}"):
+                                                   st.markdown(f"**Meilleur modèle:** {result['model']}")
+                                                   st.markdown(f"**Score R²:** {result['r2']:.4f}")
+                                                   
+                                                   # Tableau des performances
+                                                   perf_data = []
+                                                   for model_name, metrics in result['details'].items():
+                                                       perf_data.append({
+                                                           'Modèle': model_name,
+                                                           'R²': f"{metrics['r2']:.4f}",
+                                                           'RMSE': f"{metrics['rmse']:.2f}",
+                                                           'MAE': f"{metrics['mae']:.2f}"
+                                                       })
+                                                   
+                                                   st.dataframe(pd.DataFrame(perf_data), hide_index=True)
+                                       else:
+                                           st.error("❌ Échec de l'entraînement")
+                       
+                       except Exception as e:
+                           st.error(f"❌ Erreur: {e}")
+           
+           except Exception as e:
+               st.error(f"❌ Erreur lors du chargement du fichier: {e}")
+       
+       # Option pour utiliser les données de démo
+       elif 'demo_data' in st.session_state:
+           st.markdown("### 🎲 Utiliser les Données de Démonstration")
+           st.info("Vous avez des données de démonstration disponibles depuis la page d'accueil.")
+           
+           if st.button("📊 Utiliser les Données de Démo"):
+               with st.spinner("Préparation des données de démo..."):
+                   demo_data = st.session_state.demo_data
+                   
+                   try:
+                       success = st.session_state.prediction_system.load_and_prepare_data(demo_data)
+                       if success:
+                           st.success("✅ Données de démo préparées!")
+                           
+                           # Auto-entraîner
+                           if st.button("🚀 Entraîner avec Données Démo", type="primary"):
+                               with st.spinner("Entraînement en cours..."):
+                                   models_dict = {
+                                       "RandomForest": RandomForestRegressor(n_estimators=50, random_state=42),
+                                       "GradientBoosting": GradientBoostingRegressor(n_estimators=50, random_state=42),
+                                       "DecisionTree": DecisionTreeRegressor(random_state=42)
+                                   }
+                                   
+                                   results = st.session_state.prediction_system.train_models(
+                                       test_size=0.2, 
+                                       models_to_try=models_dict
+                                   )
+                                   
+                                   if results:
+                                       st.session_state.models_trained = True
+                                       st.success("✅ Modèles entraînés avec données de démo!")
+                                       
+                                       # Afficher résumé
+                                       avg_r2 = np.mean([r['r2'] for r in results.values()])
+                                       st.info(f"Score R² moyen: {avg_r2:.3f}")
+                   
+                   except Exception as e:
+                       st.error(f"❌ Erreur: {e}")
+       
+       else:
+           st.info("📁 Veuillez télécharger un fichier Excel ou créer des données de démo depuis la page d'accueil")
+
+   # =================== NOUVELLE DEMANDE & PRÉDICTION ===================
+   elif page == "📝 Nouvelle Demande & Prédiction":
+       st.header("📝 Nouvelle Demande et Prédiction")
+       
+       if not st.session_state.models_trained:
+           st.warning("⚠️ Veuillez d'abord entraîner les modèles dans la section 'Chargement & Entraînement'")
+           return
+       
+       st.markdown("### 📋 Paramètres de la Nouvelle Demande")
+       
+       col1, col2 = st.columns(2)
+       
+       with col1:
+           jour = st.selectbox(
+               "Jour de la semaine:",
+               options=list(range(1, 8)),
+               format_func=lambda x: ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'][x-1]
+           )
+       
+       with col2:
+           volume = st.number_input(
+               "Volume de production prévu:",
+               min_value=100,
+               max_value=5000,
+               value=1200,
+               step=50
+           )
+       
+       method = st.selectbox(
+           "Méthode de calcul du taux global:",
+           options=['moyenne_ponderee', 'moyenne', 'max', 'somme'],
+           format_func=lambda x: {
+               'moyenne_ponderee': '⚖️ Moyenne Pondérée (Recommandé)',
+               'moyenne': '📊 Moyenne Simple',
+               'max': '🔺 Maximum',
+               'somme': '➕ Somme'
+           }[x]
+       )
+       
+       # Option validation
+       with_validation = st.checkbox("🔍 J'ai les défauts réels pour validation")
+       
+       actual_defects = None
+       if with_validation:
+           st.markdown("### 📊 Défauts Réels (pour validation)")
+           pred_sys = st.session_state.prediction_system
+           
+           actual_defects = {}
+           cols = st.columns(len(pred_sys.postes))
+           
+           for i, poste in enumerate(pred_sys.postes):
+               with cols[i]:
+                   actual_defects[poste] = st.number_input(
+                       f"Défauts {poste.replace('_defauts', '')}:", 
+                       min_value=0.0, 
+                       value=0.0, 
+                       step=0.1
+                   )
+       
+       if st.button("🔮 Faire la Prédiction", type="primary"):
+           with st.spinner("Prédiction en cours..."):
+               try:
+                   # Ajouter à l'historique et faire la prédiction RÉELLE
+                   result = st.session_state.prediction_system.add_prediction_to_history(
+                       jour=jour,
+                       volume=volume,
+                       method=method,
+                       actual_defects=actual_defects
+                   )
+                   
+                   # Afficher les résultats RÉELS
+                   st.markdown("### 🎯 Résultats de la Prédiction RÉELLE")
+                   
+                   # Métriques principales avec valeurs réelles
+                   prediction = result['prediction']
+                   
+                   col1, col2, col3, col4 = st.columns(4)
+                   
+                   with col1:
+                       st.metric(
+                           "🎯 Taux Final de Rework",
+                           f"{result['taux_final']:.2f}%",
+                           help="Taux ajusté avec facteurs contextuels"
+                       )
+                   
+                   with col2:
+                       taux_ml = prediction['taux_rework_chaine'][method]
+                       st.metric(
+                           "🤖 Taux ML Brut",
+                           f"{taux_ml:.2f}%",
+                           help="Prédiction brute du modèle ML"
+                       )
+                   
+                   with col3:
+                       total_defauts = sum(prediction['predictions_postes'].values())
+                       st.metric(
+                           "📊 Défauts Total Prédits",
+                           f"{total_defauts:.1f}",
+                           help="Somme des défauts prédits par tous les postes"
+                       )
+                   
+                   with col4:
+                       if result.get('accuracy') is not None:
+                           st.metric(
+                               "✅ Précision de Validation",
+                               f"{result['accuracy']:.1f}%",
+                               help="Précision par rapport aux défauts réels"
+                           )
+                       else:
+                           st.metric("✅ Précision", "N/A", help="Pas de validation fournie")
+                   
+                   # Détails par poste avec modèles utilisés RÉELS
+                   st.markdown("### 🏭 Détails par Poste (Prédictions Réelles)")
+                   
+                   model_summary = st.session_state.prediction_system.get_model_summary()
+                   
+                   poste_details = []
+                   for poste in st.session_state.prediction_system.postes:
+                       defauts_pred = prediction['predictions_postes'][poste]
+                       taux_poste = prediction['taux_rework_postes'][poste]
+                       model_info = model_summary.get(poste, {})
+                       
+                       # Calcul de l'erreur si défauts réels fournis
+                       erreur = ""
+                       if actual_defects and poste in actual_defects:
+                           real_defects = actual_defects[poste]
+                           if real_defects > 0:
+                               erreur_pct = abs(defauts_pred - real_defects) / real_defects * 100
+                               erreur = f"{erreur_pct:.1f}%"
+                       
+                       detail = {
+                           'Poste': poste.replace('_defauts', ''),
+                           'Modèle ML Utilisé': model_info.get('model', 'N/A'),
+                           'Score R² du Modèle': f"{model_info.get('r2_score', 0):.3f}",
+                           'Défauts Prédits': f"{defauts_pred:.1f}",
+                           'Taux Rework (%)': f"{taux_poste:.2f}",
+                           'Poids dans Calcul': f"{model_info.get('weight', 0):.1%}",
+                           'Défauts Réels': f"{actual_defects.get(poste, 'N/A')}" if actual_defects else "N/A",
+                           'Erreur (%)': erreur if erreur else "N/A"
+                       }
+                       poste_details.append(detail)
+                   
+                   st.dataframe(pd.DataFrame(poste_details), hide_index=True, use_container_width=True)
+                   
+                   # Afficher un graphique de la prédiction
+                   fig = go.Figure()
+                   
+                   postes_names = [p.replace('_defauts', '') for p in prediction['predictions_postes'].keys()]
+                   defauts_values = list(prediction['predictions_postes'].values())
+                   
+                   fig.add_trace(go.Bar(
+                       x=postes_names,
+                       y=defauts_values,
+                       text=[f'{v:.1f}' for v in defauts_values],
+                       textposition='auto',
+                       marker_color=['#ff9999', '#66b3ff', '#99ff99', '#ffcc99'][:len(postes_names)]
+                   ))
+                   
+                   fig.update_layout(
+                       title=f"Prédiction de Défauts par Poste (Volume: {volume}, Jour: {jour})",
+                       xaxis_title="Postes",
+                       yaxis_title="Nombre de Défauts Prédits",
+                       showlegend=False
+                   )
+                   
+                   st.plotly_chart(fig, use_container_width=True)
+                   
+                   st.success("✅ Prédiction RÉELLE effectuée et ajoutée à l'historique avec succès!")
+                   
+               except Exception as e:
+                   st.error(f"❌ Erreur lors de la prédiction: {e}")
+
+   # =================== PLANIFICATION INTELLIGENTE ===================
+   elif page == "🎯 Planification Intelligente":
+       st.header("🎯 Planification Intelligente")
+       
+       pred_sys = st.session_state.prediction_system
+       
+       if not st.session_state.models_trained:
+           st.warning("⚠️ Veuillez d'abord entraîner les modèles")
+           return
+       
+       if not pred_sys.predictions_history:
+           st.warning("⚠️ Veuillez d'abord ajouter au moins une nouvelle demande")
+           return
+       
+       st.markdown("### ⚙️ Configuration de la Planification")
+       
+       col1, col2 = st.columns(2)
+       
+       with col1:
+           n_scenarios = st.selectbox("Nombre de scénarios:", [1, 3, 5], index=1)
+           n_references = st.number_input("Nombre de références:", min_value=3, max_value=10, value=8)
+           n_shifts = st.number_input("Nombre de shifts:", min_value=1, max_value=5, value=3)
+       
+       with col2:
+           capacite_shift = st.number_input("Capacité par shift:", min_value=100, max_value=500, value=180)
+           penalite_penurie = st.number_input("Pénalité pénurie:", min_value=500, max_value=3000, value=1000)
+           cout_production = st.number_input("Coût de production unitaire:", min_value=10, max_value=50, value=20)
+       
+       # Paramètres avancés
+       with st.expander("⚙️ Paramètres Avancés"):
+           col1, col2 = st.columns(2)
+           with col1:
+               alpha_rework = st.slider("Alpha rework (efficacité reprise):", 0.0, 1.0, 0.8, 0.1)
+               beta = st.slider("Beta (facteur capacité défauts):", 1.0, 2.0, 1.2, 0.1)
+           with col2:
+               time_limit = st.number_input("Limite de temps (secondes):", min_value=30, max_value=600, value=300)
+       
+       # Informations sur la dernière prédiction
+       latest_pred = pred_sys.predictions_history[-1]
+       st.markdown("### 📊 Contexte de la Dernière Prédiction")
+       
+       col1, col2, col3, col4 = st.columns(4)
+       with col1:
+           st.metric("Jour", ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'][latest_pred['jour']-1])
+       with col2:
+           st.metric("Volume", f"{latest_pred['volume']:,}")
+       with col3:
+           st.metric("Taux Final", f"{latest_pred['taux_final']:.2f}%")
+       with col4:
+           hist_count = len(pred_sys.predictions_history)
+           st.metric("Historique", f"{hist_count} prédictions")
+       
+       if st.button("🚀 Générer et Optimiser RÉELLEMENT", type="primary"):
+           with st.spinner("Génération des scénarios et optimisation RÉELLE en cours..."):
+               try:
+                   # Créer le planificateur RÉEL
+                   planner = IntelligentPlanning(pred_sys)
+                   
+                   # Générer les scénarios RÉELS
+                   scenarios = planner.generate_scenarios(latest_pred['taux_final'], n_scenarios)
+                   
+                   st.info(f"🎯 Scénarios générés: {[f'{s:.2f}%' for s in scenarios]}")
+                   
+                   # Configuration des références et demandes RÉELLES
+                   references = [f'REF_{i+1:02d}' for i in range(n_references)]
+                   # Demandes réalistes basées sur des patterns typiques
+                   np.random.seed(42)  # Pour reproductibilité
+                   demandes_base = [25, 40, 35, 30, 45, 28, 38, 42]
+                   demandes = demandes_base[:n_references] if n_references <= len(demandes_base) else demandes_base + list(np.random.randint(20, 50, n_references - len(demandes_base)))
+                   
+                   capacites = [capacite_shift] * n_shifts
+                   
+                   # Paramètres d'optimisation
+                   params = {
+                       'alpha_rework': alpha_rework,
+                       'beta': beta,
+                       'penalite_penurie': penalite_penurie,
+                       'cout_production': cout_production
+                   }
+                   
+                   st.info("📋 Configuration du problème d'optimisation...")
+                   
+                   # Configuration du problème RÉEL
+                   success = planner.setup_optimization(scenarios, references, demandes, capacites, params)
+                   
+                   if success:
+                       st.info("🔧 Résolution du problème d'optimisation...")
+                       
+                       # Résolution RÉELLE
+                       solved = planner.solve(time_limit)
+                       
+                       if solved:
+                           st.session_state.planning_results = planner.results
+                           st.success("✅ Optimisation RÉELLE réussie!")
+                           
+                           # Afficher les scénarios générés
+                           st.markdown("### 📈 Scénarios Générés (RÉELS)")
+                           
+                           scenarios_chart = create_scenarios_comparison(scenarios)
+                           st.plotly_chart(scenarios_chart, use_container_width=True)
+                           
+                           # Résultats principaux de l'optimisation
+                           st.markdown("### 📊 Résultats d'Optimisation (RÉELS)")
+                           
+                           col1, col2, col3, col4 = st.columns(4)
+                           with col1:
+                               st.metric("💰 Coût Total Optimal", f"{planner.results['cout_total']:.0f} €")
+                           with col2:
+                               st.metric("📈 Statut Optimisation", planner.results['status'])
+                           with col3:
+                               st.metric("🎯 Scénarios Analysés", len(scenarios))
+                           with col4:
+                               # Calculer le nombre total de variables
+                               total_vars = n_scenarios * n_references * n_shifts + n_scenarios * n_references
+                               st.metric("🔢 Variables Optimisées", total_vars)
+                               
+                       else:
+                           st.error("❌ Échec de l'optimisation - Vérifiez les contraintes")
+                   else:
+                       st.error("❌ Échec de la configuration du problème")
+               
+               except Exception as e:
+                   st.error(f"❌ Erreur durant l'optimisation: {e}")
+
+   # =================== DASHBOARD & COMPARAISON ===================
+   elif page == "📊 Dashboard & Comparaison":
+       st.header("📊 Dashboard et Comparaison des Scénarios")
+       
+       if not st.session_state.planning_results:
+           st.warning("⚠️ Veuillez d'abord effectuer une planification")
+           return
+       
+       results = st.session_state.planning_results
+       scenarios = results['scenarios']
+       references = [f'REF_{i+1:02d}' for i in range(8)]
+       
+       # Créer le dashboard RÉEL
+       dashboard_chart, metrics_df = create_planning_dashboard(results, references, scenarios)
+       
+       if dashboard_chart and metrics_df is not None:
+           st.plotly_chart(dashboard_chart, use_container_width=True)
+           
+           # Tableau de comparaison détaillé
+           st.markdown("### 📋 Comparaison Détaillée des Scénarios (RÉELS)")
+           
+           # Ajouter une colonne de recommandation basée sur un score composite
+           best_scenario_idx = metrics_df['Score_Global'].idxmax()
+           metrics_df['Recommandation'] = metrics_df.apply(
+               lambda row: "⭐ RECOMMANDÉ" if row.name == best_scenario_idx else "", axis=1
+           )
+           
+           # Ajouter des métriques de risque
+           metrics_df['Niveau_Risque'] = metrics_df.apply(
+               lambda row: "🟢 Faible" if row['Taux_Rework'] < 5 and row['Penuries_Totales'] < 10 
+                          else "🟡 Modéré" if row['Taux_Rework'] < 10 and row['Penuries_Totales'] < 20
+                          else "🔴 Élevé", axis=1
+           )
+           
+           # Formatage pour l'affichage
+           display_df = metrics_df.copy()
+           display_df['Production_Totale'] = display_df['Production_Totale'].apply(lambda x: f"{x:,.0f}")
+           display_df['Penuries_Totales'] = display_df['Penuries_Totales'].apply(lambda x: f"{x:.1f}")
+           display_df['Cout_Estime'] = display_df['Cout_Estime'].apply(lambda x: f"{x:,.0f} €")
+           display_df['Score_Global'] = display_df['Score_Global'].apply(lambda x: f"{x:.1f}/100")
+           display_df['Taux_Rework'] = display_df['Taux_Rework'].apply(lambda x: f"{x:.2f}%")
+           
+           st.dataframe(display_df, hide_index=True, use_container_width=True)
+           
+           # Analyse et recommandations DÉTAILLÉES
+           st.markdown("### 💡 Analyse Détaillée et Recommandations")
+           
+           best_scenario = metrics_df.iloc[best_scenario_idx]
+           
+           col1, col2 = st.columns(2)
+           
+           with col1:
+               st.markdown(f"""
+               **🏆 Scénario Recommandé: {best_scenario['Scenario']}**
+               
+               - **Taux de Rework:** {best_scenario['Taux_Rework']:.2f}%
+               - **Score Global:** {best_scenario['Score_Global']:.1f}/100
+               - **Production Totale:** {best_scenario['Production_Totale']:,.0f} unités
+               - **Pénuries:** {best_scenario['Penuries_Totales']:.1f} unités
+               - **Coût Estimé:** {best_scenario['Cout_Estime']:,.0f} €
+               - **Niveau de Risque:** {best_scenario['Niveau_Risque']}
+               """)
+           
+           with col2:
+               # Critères de décision détaillés
+               st.markdown("**🎯 Évaluation Détaillée:**")
+               
+               # Évaluation des pénuries
+               penurie_rate = best_scenario['Penuries_Totales'] / 200 * 100  # Assumant demande totale ~200
+               if penurie_rate < 5:
+                   st.success(f"✅ Pénuries faibles ({penurie_rate:.1f}%)")
+               elif penurie_rate < 15:
+                   st.warning(f"⚠️ Pénuries modérées ({penurie_rate:.1f}%)")
+               else:
+                   st.error(f"❌ Pénuries élevées ({penurie_rate:.1f}%)")
+               
+               # Évaluation du taux de rework
+               if best_scenario['Taux_Rework'] < 3:
+                   st.success("✅ Taux de rework excellent")
+               elif best_scenario['Taux_Rework'] < 7:
+                   st.info("ℹ️ Taux de rework acceptable")
+               elif best_scenario['Taux_Rework'] < 12:
+                   st.warning("⚠️ Taux de rework élevé")
+               else:
+                   st.error("❌ Taux de rework critique")
+       
+       else:
+           st.error("❌ Impossible de créer le dashboard - Données insuffisantes")
+
+   # =================== HISTORIQUE & PERFORMANCE ===================
+   elif page == "📈 Historique & Performance":
+       st.header("📈 Historique et Analyse de Performance")
+       
+       pred_sys = st.session_state.prediction_system
+       
+       if not pred_sys.predictions_history:
+           st.info("📭 Aucun historique disponible")
+           return
+       
+       # Statistiques générales
+       st.markdown("### 📊 Statistiques Générales")
+       
+       history = pred_sys.predictions_history
+       total_predictions = len(history)
+       validated_predictions = sum(1 for p in history if p.get('accuracy') is not None)
+       
+       col1, col2, col3, col4 = st.columns(4)
+       
+       with col1:
+           st.metric("Total Prédictions", total_predictions)
+       
+       with col2:
+           st.metric("Prédictions Validées", validated_predictions)
+       
+       with col3:
+           if validated_predictions > 0:
+               avg_accuracy = np.mean([p['accuracy'] for p in history if p.get('accuracy')])
+               st.metric("Précision Moyenne", f"{avg_accuracy:.1f}%")
+           else:
+               st.metric("Précision Moyenne", "N/A")
+       
+       with col4:
+           avg_rework = np.mean([p['taux_final'] for p in history])
+           st.metric("Taux Rework Moyen", f"{avg_rework:.2f}%")
+       
+       # Évolution temporelle
+       if total_predictions > 1:
+           st.markdown("### 📈 Évolution Temporelle")
+           
+           # Préparer les données pour le graphique
+           timestamps = [p['timestamp'] for p in history]
+           taux_finals = [p['taux_final'] for p in history]
+           accuracies = [p.get('accuracy') for p in history]
+           
+           fig = make_subplots(
+               rows=2, cols=1,
+               subplot_titles=('Évolution des Taux de Rework', 'Évolution de la Précision'),
+               vertical_spacing=0.1
+           )
+           
+           # Taux de rework
+           fig.add_trace(
+               go.Scatter(x=timestamps, y=taux_finals,
+                         mode='lines+markers',
+                         name='Taux de Rework Final',
+                         line=dict(color='blue', width=2),
+                         marker=dict(size=8)),
+               row=1, col=1
+           )
+           
+           # Précision (seulement les valeurs non nulles)
+           valid_timestamps = [t for t, a in zip(timestamps, accuracies) if a is not None]
+           valid_accuracies = [a for a in accuracies if a is not None]
+           
+           if valid_accuracies:
+               fig.add_trace(
+                   go.Scatter(x=valid_timestamps, y=valid_accuracies,
+                             mode='lines+markers',
+                             name='Précision (%)',
+                             line=dict(color='green', width=2),
+                             marker=dict(size=8)),
+                   row=2, col=1
+               )
+           
+           fig.update_layout(height=500, showlegend=True)
+           fig.update_xaxes(title_text="Temps", row=2, col=1)
+           fig.update_yaxes(title_text="Taux de Rework (%)", row=1, col=1)
+           fig.update_yaxes(title_text="Précision (%)", row=2, col=1)
+           
+           st.plotly_chart(fig, use_container_width=True)
+       
+       # Performance des modèles
+       if st.session_state.models_trained:
+           st.markdown("### 🤖 Performance des Modèles ML")
+           
+           model_summary = pred_sys.get_model_summary()
+           if model_summary:
+               model_perf_data = []
+               
+               for poste, info in model_summary.items():
+                   model_perf_data.append({
+                       'Poste': poste.replace('_defauts', ''),
+                       'Modèle': info['model'],
+                       'Score R²': f"{info['r2_score']:.4f}",
+                       'Poids': f"{info['weight']:.1%}",
+                       'Import. Volume': f"{info.get('feature_importance', {}).get('Volume', 0):.3f}",
+                       'Import. Jour': f"{info.get('feature_importance', {}).get('Jour', 0):.3f}"
+                   })
+               
+               st.dataframe(pd.DataFrame(model_perf_data), hide_index=True, use_container_width=True)
+               
+               # Graphique de performance des modèles
+               model_chart = create_model_performance_chart(model_summary)
+               if model_chart:
+                   st.plotly_chart(model_chart, use_container_width=True)
+       
+       # Tableau détaillé de l'historique
+       st.markdown("### 📋 Historique Détaillé")
+       
+       n_display = st.slider("Nombre d'entrées à afficher:", 5, min(20, total_predictions), 10)
+       
+       recent_history = history[-n_display:]
+       
+       display_data = []
+       for i, pred in enumerate(reversed(recent_history), 1):
+           day_name = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'][pred['jour']-1]
+           
+           display_data.append({
+               '#': total_predictions - i + 1,
+               'Date/Heure': pred['timestamp'].strftime("%Y-%m-%d %H:%M"),
+               'Jour': day_name,
+               'Volume': f"{pred['volume']:,}",
+               'Méthode': pred['method'],
+               'Taux Final (%)': f"{pred['taux_final']:.2f}",
+               'Précision (%)': f"{pred['accuracy']:.1f}" if pred.get('accuracy') else "N/A",
+               'Validé': "✅" if pred.get('actual_defects') else "❌"
+           })
+       
+       st.dataframe(pd.DataFrame(display_data), hide_index=True, use_container_width=True)
+       
+       # Export des données
+       st.markdown("### 💾 Export des Données")
+       
+       col1, col2 = st.columns(2)
+       
+       with col1:
+           if st.button("📥 Exporter Historique CSV"):
+               csv_data = []
+               for pred in history:
+                   csv_data.append({
+                       'Timestamp': pred['timestamp'].strftime("%Y-%m-%d %H:%M:%S"),
+                       'Jour': pred['jour'],
+                       'Volume': pred['volume'],
+                       'Methode': pred['method'],
+                       'Taux_Final_%': pred['taux_final'],
+                       'Precision_%': pred.get('accuracy', ''),
+                       'Valide': pred.get('actual_defects') is not None
+                   })
+               
+               csv_df = pd.DataFrame(csv_data)
+               csv_string = csv_df.to_csv(index=False)
+               
+               timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+               filename = f"historique_predictions_{timestamp}.csv"
+               
+               st.download_button(
+                   label="💾 Télécharger CSV",
+                   data=csv_string,
+                   file_name=filename,
+                   mime="text/csv"
+               )
+       
+       with col2:
+           if st.button("🧹 Nettoyer Historique"):
+               if st.session_state.get('confirm_clear', False):
+                   pred_sys.predictions_history = []
+                   pred_sys.save_history()
+                   st.session_state.confirm_clear = False
+                   st.success("✅ Historique nettoyé")
+                   st.rerun()
+               else:
+                   st.session_state.confirm_clear = True
+                   st.warning("⚠️ Cliquez à nouveau pour confirmer")
 
 # =====================================================================
 # POINT D'ENTRÉE PRINCIPAL
 # =====================================================================
 
-def main():
-    # En-tête
-    st.markdown("""
-    <div class="main-header">
-        <h1>🏭 Système Intégré avec Prédictions et Planification Réelles</h1>
-        <p>Machine Learning + Optimisation + Dashboard Intelligent</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # Initialisation sécurisée des variables de session
-    if 'prediction_system' not in st.session_state:
-        st.session_state.prediction_system = RealPredictionSystem()
-    
-    if 'models_trained' not in st.session_state:
-        st.session_state.models_trained = False
-    
-    if 'planning_results' not in st.session_state:
-        st.session_state.planning_results = None
-
-    # Navigation
-    st.sidebar.title("🧭 Navigation")
-    page = st.sidebar.selectbox(
-        "Choisissez une section:",
-        [
-            "🏠 Accueil",
-            "📁 Chargement & Entraînement", 
-            "📝 Nouvelle Demande & Prédiction",
-            "🎯 Planification Intelligente",
-            "📊 Dashboard & Comparaison",
-            "📈 Historique & Performance"
-        ]
-    )
-
-# =====================================================================
-# INSTRUCTIONS D'UTILISATION COMPLÈTES
-# =====================================================================
-
-"""
-🚀 GUIDE D'UTILISATION COMPLET:
-
-1. **Installation des Dépendances:**
-   ```bash
-   pip install streamlit pandas numpy plotly scikit-learn pulp openpyxl
-   ```
-
-2. **Lancement de l'Application:**
-   ```bash
-   streamlit run nom_du_fichier.py
-   ```
-
-3. **Workflow Complet:**
-
-   **Étape 1: Chargement & Entraînement**
-   - Téléchargez votre fichier Excel avec colonnes: Jour, Volume_production, Poste1_defauts, etc.
-   - Le système identifie automatiquement les colonnes
-   - Choisissez les modèles ML à tester (RandomForest, GradientBoosting, DecisionTree)
-   - L'entraînement sélectionne automatiquement le meilleur modèle par poste
-   - Visualisez les performances (Score R², RMSE, MAE)
-
-   **Étape 2: Nouvelle Demande & Prédiction**
-   - Saisissez le jour de la semaine et le volume prévu
-   - Choisissez la méthode de calcul (moyenne pondérée recommandée)
-   - Optionnel: Ajoutez les défauts réels pour validation
-   - Le système prédit les défauts par poste et calcule le taux de rework
-   - Affichage détaillé: modèles utilisés, paramètres, précision
-
-   **Étape 3: Planification Intelligente**
-   - Configuration des paramètres (scénarios, capacités, coûts)
-   - Génération automatique de scénarios basés sur l'historique + nouvelle demande
-   - Optimisation mathématique avec contraintes réelles
-   - Résolution du problème de planification
-
-   **Étape 4: Dashboard & Comparaison**
-   - Visualisation comparative des scénarios
-   - Métriques de performance (production, pénuries, coûts, scores)
-   - Recommandation automatique du meilleur scénario
-   - Actions correctives suggérées
-
-   **Étape 5: Historique & Performance**
-   - Analyse de l'évolution temporelle
-   - Performance par jour de la semaine
-   - Statistiques des modèles ML
-   - Export des données
-
-4. **Fonctionnalités Avancées:**
-
-   **Machine Learning:**
-   - Entraînement automatique de 3+ modèles par poste
-   - Sélection du meilleur modèle basée sur le score R²
-   - Feature importance (Volume vs Jour)
-   - Validation croisée et métriques multiples
-
-   **Prédictions Intelligentes:**
-   - Ajustements contextuels (volume, jour de semaine)
-   - Calcul de taux de rework par multiple méthodes
-   - Validation en temps réel avec défauts réels
-   - Historique complet avec tracking de précision
-
-   **Planification Optimale:**
-   - Génération de scénarios intelligents
-   - Combinaison historique + prédiction actuelle
-   - Optimisation avec PuLP (CBC solver)
-   - Gestion des contraintes de capacité et demande
-
-   **Dashboard Interactif:**
-   - Comparaison visuelle des scénarios
-   - Métriques multiples (coût, pénuries, production)
-   - Score global automatique
-   - Recommandations basées sur les performances
-
-5. **Format des Données d'Entrée:**
-   
-   **Colonnes Obligatoires:**
-   - `Jour` ou `jour`: Numéro du jour (1-7, Lundi=1)
-   - `Volume_production` ou `volume`: Volume de production
-   - `Poste1_defauts`, `Poste2_defauts`, etc.: Nombre de défauts par poste
-
-   **Exemple de Structure:**
-   ```
-   Jour | Volume_production | Poste1_defauts | Poste2_defauts | Poste3_defauts
-   1    | 1200             | 24            | 18            | 31
-   2    | 1350             | 27            | 20            | 34
-   ...
-   ```
-
-6. **Modèles ML Supportés:**
-   - **RandomForest:** Robuste, gère les non-linéarités
-   - **GradientBoosting:** Précis, boosting séquentiel
-   - **DecisionTree:** Interprétable, rapide
-   - **LinearRegression:** Simple, baseline
-
-7. **Optimisation de Planification:**
-   - **Variables:** Production par (scénario, référence, shift)
-   - **Contraintes:** Demande, capacité
-   - **Objectif:** Minimiser coût total (production + pénuries)
-   - **Scénarios:** Optimiste, Nominal, Pessimiste
-
-8. **Export et Persistance:**
-   - Export CSV/Excel de l'historique
-   - Sauvegarde automatique dans session Streamlit
-   - Réinitialisation complète du système
-
-9. **Conseils d'Utilisation:**
-   - Utilisez au moins 50 lignes de données pour l'entraînement
-   - Validez régulièrement les prédictions avec défauts réels
-   - Analysez les tendances par jour de la semaine
-   - Ajustez les paramètres de planification selon votre contexte
-
-10. **Dépannage Courant:**
-    - **Erreur de colonnes:** Vérifiez les noms des colonnes
-    - **Modèles non entraînés:** Retournez à l'étape de chargement
-    - **Optimisation échouée:** Réduisez les contraintes ou augmentez le temps limite
-    - **Performances faibles:** Collectez plus de données ou ajustez les paramètres
-
-Ce système représente une solution complète de prédiction et planification industrielle avec ML et optimisation mathématique intégrés.
-"""
+if __name__ == "__main__":
+   # Lancer l'application principale avec gestion sécurisée
+   try:
+       main()
+       # Ajouter les informations de la sidebar après l'initialisation
+       create_sidebar_info()
+   except Exception as e:
+       st.error(f"Erreur lors du lancement de l'application: {e}")
+       st.info("Veuillez rafraîchir la page ou vérifier les dépendances installées.")
+           
