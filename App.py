@@ -1591,32 +1591,51 @@ def create_sidebar_info():
     # Statut du système
     st.sidebar.markdown("### 📊 Statut Système")
     
+    # Vérifier et initialiser les variables de session si nécessaire
+    if 'models_trained' not in st.session_state:
+        st.session_state.models_trained = False
+    
+    if 'prediction_system' not in st.session_state:
+        st.session_state.prediction_system = RealPredictionSystem()
+    
+    if 'planning_results' not in st.session_state:
+        st.session_state.planning_results = None
+    
     if st.session_state.models_trained:
         st.sidebar.success("✅ Modèles Entraînés")
-        model_summary = st.session_state.prediction_system.get_model_summary()
-        if model_summary:
-            st.sidebar.write(f"**Postes:** {len(model_summary)}")
-            avg_r2 = np.mean([info['r2_score'] for info in model_summary.values()])
-            st.sidebar.write(f"**R² Moyen:** {avg_r2:.3f}")
+        try:
+            model_summary = st.session_state.prediction_system.get_model_summary()
+            if model_summary:
+                st.sidebar.write(f"**Postes:** {len(model_summary)}")
+                avg_r2 = np.mean([info['r2_score'] for info in model_summary.values()])
+                st.sidebar.write(f"**R² Moyen:** {avg_r2:.3f}")
+        except Exception:
+            pass
     else:
         st.sidebar.warning("⏳ Modèles non entraînés")
     
-    hist_count = len(st.session_state.prediction_system.predictions_history)
-    if hist_count > 0:
-        st.sidebar.info(f"📊 {hist_count} prédictions")
-        
-        # Dernière prédiction
-        latest = st.session_state.prediction_system.predictions_history[-1]
-        st.sidebar.write(f"**Dernier taux:** {latest['taux_final']:.2f}%")
-        st.sidebar.write(f"**Dernière validation:** {'✅' if latest.get('accuracy') else '❌'}")
-    else:
+    try:
+        hist_count = len(st.session_state.prediction_system.predictions_history)
+        if hist_count > 0:
+            st.sidebar.info(f"📊 {hist_count} prédictions")
+            
+            # Dernière prédiction
+            latest = st.session_state.prediction_system.predictions_history[-1]
+            st.sidebar.write(f"**Dernier taux:** {latest['taux_final']:.2f}%")
+            st.sidebar.write(f"**Dernière validation:** {'✅' if latest.get('accuracy') else '❌'}")
+        else:
+            st.sidebar.warning("📭 Aucun historique")
+    except Exception:
         st.sidebar.warning("📭 Aucun historique")
     
-    if st.session_state.planning_results:
-        st.sidebar.success("✅ Planification OK")
-        cost = st.session_state.planning_results['cout_total']
-        st.sidebar.write(f"**Coût optimal:** {cost:.0f}€")
-    else:
+    try:
+        if st.session_state.planning_results:
+            st.sidebar.success("✅ Planification OK")
+            cost = st.session_state.planning_results['cout_total']
+            st.sidebar.write(f"**Coût optimal:** {cost:.0f}€")
+        else:
+            st.sidebar.warning("⏳ Planification à faire")
+    except Exception:
         st.sidebar.warning("⏳ Planification à faire")
     
     # Actions rapides
@@ -1624,9 +1643,17 @@ def create_sidebar_info():
     st.sidebar.markdown("### ⚡ Actions Rapides")
     
     if st.sidebar.button("🔄 Réinitialiser Système"):
-        for key in ['prediction_system', 'models_trained', 'planning_results']:
+        # Réinitialiser toutes les variables de session
+        keys_to_reset = ['prediction_system', 'models_trained', 'planning_results']
+        for key in keys_to_reset:
             if key in st.session_state:
                 del st.session_state[key]
+        
+        # Réinitialiser le système de prédiction
+        st.session_state.prediction_system = RealPredictionSystem()
+        st.session_state.models_trained = False
+        st.session_state.planning_results = None
+        
         st.sidebar.success("✅ Système réinitialisé")
         st.rerun()
     
@@ -1648,12 +1675,38 @@ def create_sidebar_info():
 # POINT D'ENTRÉE PRINCIPAL
 # =====================================================================
 
-if __name__ == "__main__":
-    # Ajouter les informations de la sidebar
-    create_sidebar_info()
+def main():
+    # En-tête
+    st.markdown("""
+    <div class="main-header">
+        <h1>🏭 Système Intégré avec Prédictions et Planification Réelles</h1>
+        <p>Machine Learning + Optimisation + Dashboard Intelligent</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Initialisation sécurisée des variables de session
+    if 'prediction_system' not in st.session_state:
+        st.session_state.prediction_system = RealPredictionSystem()
     
-    # Lancer l'application principale
-    main()
+    if 'models_trained' not in st.session_state:
+        st.session_state.models_trained = False
+    
+    if 'planning_results' not in st.session_state:
+        st.session_state.planning_results = None
+
+    # Navigation
+    st.sidebar.title("🧭 Navigation")
+    page = st.sidebar.selectbox(
+        "Choisissez une section:",
+        [
+            "🏠 Accueil",
+            "📁 Chargement & Entraînement", 
+            "📝 Nouvelle Demande & Prédiction",
+            "🎯 Planification Intelligente",
+            "📊 Dashboard & Comparaison",
+            "📈 Historique & Performance"
+        ]
+    )
 
 # =====================================================================
 # INSTRUCTIONS D'UTILISATION COMPLÈTES
