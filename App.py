@@ -757,10 +757,81 @@ class IntegratedPredictionPlanningSystem:
 
 # Fonctions d'interface Streamlit
 def create_header():
+    """Créer l'en-tête avec les logos et le titre"""
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    
+    with col1:
+        # Logo Yazaki stylisé
+        st.markdown("""
+        <div style='text-align: center; padding: 15px;'>
+            <div style='
+                background: linear-gradient(135deg, #1f4e79, #2c5aa0);
+                color: white;
+                padding: 20px;
+                border-radius: 15px;
+                box-shadow: 0 4px 15px rgba(31, 78, 121, 0.3);
+                margin: 10px;
+                border: 3px solid #1f4e79;
+            '>
+                <div style='font-size: 28px; margin-bottom: 8px;'>🏭</div>
+                <div style='font-weight: bold; font-size: 20px; letter-spacing: 1px;'>YAZAKI</div>
+                <div style='font-size: 12px; opacity: 0.9; margin-top: 5px;'>INDUSTRIAL SOLUTIONS</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        # Titre central
+        st.markdown("""
+        <div class="main-header">
+            <h1>🏭 Système Intégré Prédiction-Planification</h1>
+            <p>Prédiction de défauts et planification stochastique optimisée</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        # Logo ENSAM stylisé
+        st.markdown("""
+        <div style='text-align: center; padding: 15px;'>
+            <div style='
+                background: linear-gradient(135deg, #2e86ab, #3a9bc1);
+                color: white;
+                padding: 20px;
+                border-radius: 15px;
+                box-shadow: 0 4px 15px rgba(46, 134, 171, 0.3);
+                margin: 10px;
+                border: 3px solid #2e86ab;
+            '>
+                <div style='font-size: 28px; margin-bottom: 8px;'>🎓</div>
+                <div style='font-weight: bold; font-size: 20px; letter-spacing: 1px;'>ENSAM</div>
+                <div style='font-size: 12px; opacity: 0.9; margin-top: 5px;'>ARTS ET MÉTIERS</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Ligne de séparation
+    st.markdown("---")
+    
+    # Bannière de partenariat
     st.markdown("""
-    <div class="main-header">
-        <h1>🏭 Système Intégré Prédiction-Planification</h1>
-        <p>Prédiction de défauts et planification stochastique optimisée</p>
+    <div style='
+        text-align: center; 
+        padding: 15px; 
+        background: linear-gradient(90deg, rgba(31, 78, 121, 0.1), rgba(46, 134, 171, 0.1)); 
+        border-radius: 10px; 
+        margin-bottom: 20px;
+        border-left: 4px solid #1f4e79;
+        border-right: 4px solid #2e86ab;
+    '>
+        <div style='display: flex; justify-content: center; align-items: center; gap: 20px; flex-wrap: wrap;'>
+            <span style='color: #1f4e79; font-weight: bold; font-size: 16px;'>🏭 YAZAKI</span>
+            <span style='color: #666; font-size: 20px;'>⚡</span>
+            <span style='color: #2e86ab; font-weight: bold; font-size: 16px;'>ENSAM 🎓</span>
+        </div>
+        <div style='color: #666; margin-top: 8px; font-size: 14px; font-style: italic;'>
+            Partenariat Industriel-Académique | Innovation & Excellence
+        </div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -778,7 +849,14 @@ def load_data_section():
     
     with col2:
         if st.button("📝 Utiliser des données de démo", use_container_width=True):
-            return create_demo_data()
+            with st.spinner("Génération des données de démonstration..."):
+                demo_data = create_demo_data()
+                st.success(f"✅ Données de démo générées: {len(demo_data)} lignes")
+                
+                # Affichage des données de démonstration
+                display_demo_data(demo_data)
+                
+                return demo_data
     
     if uploaded_file is not None:
         try:
@@ -796,7 +874,171 @@ def load_data_section():
     
     return None
 
+def display_demo_data(demo_data):
+    """Affiche les données de démonstration avec des statistiques et visualisations"""
+    st.subheader("📊 Données de Démonstration Générées")
+    
+    # Statistiques générales
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric(
+            "Nombre de jours",
+            len(demo_data)
+        )
+    
+    with col2:
+        volume_moyen = demo_data['Volume_production'].mean()
+        st.metric(
+            "Volume moyen",
+            f"{volume_moyen:.0f}"
+        )
+    
+    with col3:
+        defauts_total = demo_data[['Poste1_defauts', 'Poste2_defauts', 'Poste3_defauts']].sum().sum()
+        st.metric(
+            "Total défauts",
+            f"{defauts_total:.0f}"
+        )
+    
+    with col4:
+        taux_defaut_moyen = (defauts_total / demo_data['Volume_production'].sum()) * 100
+        st.metric(
+            "Taux défaut moyen",
+            f"{taux_defaut_moyen:.2f}%"
+        )
+    
+    # Aperçu des données
+    with st.expander("👀 Aperçu des Données Générées", expanded=True):
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            st.write("**Premières lignes des données:**")
+            st.dataframe(demo_data.head(10), use_container_width=True)
+        
+        with col2:
+            st.write("**Statistiques descriptives:**")
+            stats_df = demo_data.describe().round(2)
+            st.dataframe(stats_df)
+    
+    # Visualisations des données de démo
+    st.write("### 📈 Visualisations des Données")
+    
+    # Graphique 1: Évolution du volume de production
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        fig_volume = px.line(
+            demo_data, 
+            x=demo_data.index, 
+            y='Volume_production',
+            title="Évolution du Volume de Production",
+            labels={'x': 'Jours', 'Volume_production': 'Volume'}
+        )
+        fig_volume.update_traces(line=dict(color='blue', width=2))
+        st.plotly_chart(fig_volume, use_container_width=True)
+    
+    with col2:
+        # Graphique des défauts par poste
+        defauts_cols = ['Poste1_defauts', 'Poste2_defauts', 'Poste3_defauts']
+        fig_defauts = px.line(
+            demo_data, 
+            x=demo_data.index,
+            y=defauts_cols,
+            title="Évolution des Défauts par Poste",
+            labels={'x': 'Jours', 'value': 'Nombre de défauts', 'variable': 'Poste'}
+        )
+        st.plotly_chart(fig_defauts, use_container_width=True)
+    
+    # Graphiques supplémentaires
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Distribution du volume par jour de la semaine
+        volume_par_jour = demo_data.groupby('Jour')['Volume_production'].mean().reset_index()
+        volume_par_jour['Jour_nom'] = volume_par_jour['Jour'].map({
+            1: 'Lundi', 2: 'Mardi', 3: 'Mercredi', 4: 'Jeudi', 
+            5: 'Vendredi', 6: 'Samedi', 7: 'Dimanche'
+        })
+        
+        fig_jour = px.bar(
+            volume_par_jour,
+            x='Jour_nom',
+            y='Volume_production',
+            title="Volume Moyen par Jour de la Semaine",
+            color='Volume_production',
+            color_continuous_scale='viridis'
+        )
+        st.plotly_chart(fig_jour, use_container_width=True)
+    
+    with col2:
+        # Taux de défaut par poste
+        taux_defauts = []
+        for poste in defauts_cols:
+            taux = (demo_data[poste].sum() / demo_data['Volume_production'].sum()) * 100
+            taux_defauts.append({
+                'Poste': poste.replace('_defauts', ''),
+                'Taux_defaut': taux
+            })
+        
+        df_taux = pd.DataFrame(taux_defauts)
+        fig_taux = px.bar(
+            df_taux,
+            x='Poste',
+            y='Taux_defaut',
+            title="Taux de Défaut par Poste (%)",
+            color='Taux_defaut',
+            color_continuous_scale='reds'
+        )
+        fig_taux.update_layout(showlegend=False)
+        st.plotly_chart(fig_taux, use_container_width=True)
+    
+    # Corrélations
+    with st.expander("🔍 Analyse de Corrélation"):
+        st.write("**Matrice de corrélation entre les variables:**")
+        
+        # Calculer la matrice de corrélation
+        corr_matrix = demo_data[['Volume_production'] + defauts_cols].corr()
+        
+        # Créer un heatmap
+        fig_corr = px.imshow(
+            corr_matrix,
+            title="Matrice de Corrélation",
+            color_continuous_scale='RdBu_r',
+            aspect='auto'
+        )
+        fig_corr.update_layout(width=600, height=500)
+        st.plotly_chart(fig_corr, use_container_width=True)
+        
+        # Afficher la matrice numériquement
+        st.write("**Valeurs de corrélation:**")
+        st.dataframe(corr_matrix.round(3))
+    
+    # Résumé des caractéristiques
+    with st.expander("📋 Caractéristiques des Données de Démonstration"):
+        st.markdown("""
+        **🎯 Caractéristiques des données générées:**
+        
+        - **Période:** 100 jours simulés avec variation saisonnière
+        - **Volume de production:** 
+          - Jours ouvrables: ~1200 unités (± 100)
+          - Week-ends: ~800 unités (± 100)
+        - **Défauts par poste:**
+          - Poste1: ~2% du volume + variation jour + bruit
+          - Poste2: ~1.5% du volume + variation jour + bruit  
+          - Poste3: ~2.5% du volume + variation jour + bruit
+        - **Corrélations:** Les défauts sont corrélés au volume et au jour de la semaine
+        - **Réalisme:** Données basées sur des patterns industriels typiques
+        
+        **📊 Utilisation:**
+        Ces données permettent de tester le système de prédiction et de planification
+        avec des patterns réalistes de production industrielle.
+        """)
+    
+    st.success("✅ Données de démonstration prêtes pour l'analyse !")
+
 def create_demo_data(n_days=100):
+    """Crée des données de démonstration avec des valeurs réalistes"""
     np.random.seed(42)
     days = range(1, n_days + 1)
     data = []
@@ -804,18 +1046,20 @@ def create_demo_data(n_days=100):
     for day in days:
         jour_semaine = ((day - 1) % 7) + 1
         
-        if jour_semaine in [6, 7]:
+        if jour_semaine in [6, 7]:  # Weekend
             volume_base = 800
-        else:
+        else:  # Jours de semaine
             volume_base = 1200
 
         volume = volume_base + np.random.normal(0, 100)
         volume = max(volume, 100)
 
+        # Générer des défauts réalistes pour chaque poste
         poste1_defauts = volume * 0.02 + jour_semaine * 0.5 + np.random.normal(0, 2)
         poste2_defauts = volume * 0.015 + jour_semaine * 0.3 + np.random.normal(0, 1.5)
         poste3_defauts = volume * 0.025 + jour_semaine * 0.4 + np.random.normal(0, 2.5)
 
+        # S'assurer que les défauts sont positifs
         poste1_defauts = max(0, poste1_defauts)
         poste2_defauts = max(0, poste2_defauts)
         poste3_defauts = max(0, poste3_defauts)
@@ -828,7 +1072,14 @@ def create_demo_data(n_days=100):
             'Poste3_defauts': poste3_defauts
         })
 
-    return pd.DataFrame(data)
+    df = pd.DataFrame(data)
+    
+    # Vérification des données générées
+    print(f"Données de démo générées: {len(df)} lignes")
+    print(f"Colonnes: {list(df.columns)}")
+    print(f"Volume moyen: {df['Volume_production'].mean():.1f}")
+    
+    return df
 
 def prediction_section(system, data):
     st.header("🔮 Prédiction de Défauts")
@@ -1086,6 +1337,10 @@ def planning_section(system, prediction_result):
                     
                     if results:
                         st.success("✅ Planification réussie!")
+                        
+                        # Affichage immédiat des scénarios
+                        display_scenario_details(system)
+                        
                         return results
                     else:
                         st.error("❌ Erreur lors de l'analyse des résultats")
@@ -1095,6 +1350,162 @@ def planning_section(system, prediction_result):
                 st.error("❌ Erreur de configuration")
     
     return None
+
+def display_scenario_details(system):
+    """Affiche les détails de tous les scénarios avec positions et quantités"""
+    st.subheader("🎯 Détails des Scénarios de Planification")
+    
+    if not hasattr(system.planner, 'scenario_analysis') or not system.planner.scenario_analysis:
+        st.error("❌ Aucune analyse de scénario disponible")
+        return
+    
+    scenario_analysis = system.planner.scenario_analysis
+    params = system.planner.parameters
+    
+    # Tabs pour chaque scénario
+    tab_names = [f"Scénario {s+1}" for s in range(len(scenario_analysis))]
+    tabs = st.tabs(tab_names)
+    
+    for tab_idx, (s, scenario_data) in enumerate(scenario_analysis.items()):
+        with tabs[tab_idx]:
+            
+            # KPIs du scénario
+            kpis = scenario_data['kpis']
+            
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Satisfaction", f"{kpis['satisfaction_globale']:.1f}%")
+            with col2:
+                st.metric("Utilisation Capacité", f"{kpis['utilisation_capacite']:.1f}%")
+            with col3:
+                st.metric("Total Pénuries", f"{kpis['total_penuries']:.1f}")
+            with col4:
+                st.metric("Coût Estimé", f"{kpis['cout_estime']:,.0f}")
+            
+            st.markdown("---")
+            
+            # Détails par shift
+            st.write("### 📋 Plan d'Exécution par Shift")
+            
+            for t in range(params['T']):
+                shift_info = scenario_data['shifts_details'][t+1]
+                
+                st.write(f"#### 🔄 Shift {t+1}")
+                
+                col1, col2 = st.columns([2, 1])
+                
+                with col1:
+                    # Ordre d'exécution
+                    ordre_execution = shift_info['execution_order']
+                    ordre_clean = [ref for ref in ordre_execution if ref != 'VIDE']
+                    
+                    if ordre_clean:
+                        st.write("**Ordre d'exécution:**")
+                        ordre_display = " → ".join(ordre_clean)
+                        st.markdown(f"`{ordre_display}`")
+                    else:
+                        st.write("**Aucune production programmée**")
+                    
+                    # Quantités détaillées
+                    if shift_info['quantities']:
+                        st.write("**Quantités à produire:**")
+                        
+                        # Créer un DataFrame pour l'affichage
+                        quantities_data = []
+                        for ref, qty in shift_info['quantities'].items():
+                            if qty > 0:
+                                # Calculer la production utile
+                                taux_defaut = params['taux_defaut'][(s, ref)]
+                                prod_utile = qty * (1 - taux_defaut)
+                                prod_recuperee = qty * taux_defaut * params['alpha_rework']
+                                total_utile = prod_utile + prod_recuperee
+                                
+                                quantities_data.append({
+                                    'Référence': ref,
+                                    'Quantité Brute': f"{qty:.0f}",
+                                    'Production Utile': f"{total_utile:.0f}",
+                                    'Taux Défaut': f"{taux_defaut*100:.1f}%"
+                                })
+                        
+                        if quantities_data:
+                            df_quantities = pd.DataFrame(quantities_data)
+                            st.dataframe(df_quantities, hide_index=True, use_container_width=True)
+                
+                with col2:
+                    # Métriques du shift
+                    st.write("**Métriques du Shift:**")
+                    st.metric("Capacité Utilisée", 
+                             f"{shift_info['capacity_used']:.0f}/{shift_info['capacity_available']:.0f}")
+                    st.metric("Taux d'Utilisation", 
+                             f"{shift_info['capacity_utilization']:.1f}%")
+                    
+                    nb_refs_actives = len([ref for ref, qty in shift_info['quantities'].items() if qty > 0])
+                    st.metric("Références Actives", nb_refs_actives)
+                
+                st.markdown("---")
+            
+            # Résumé production par référence
+            st.write("### 📊 Résumé Production par Référence")
+            
+            production_summary = []
+            for ref, info in scenario_data['production_summary'].items():
+                production_summary.append({
+                    'Référence': ref,
+                    'Demande': f"{info['demande']:.0f}",
+                    'Production Brute': f"{info['production_brute']:.0f}",
+                    'Production Utile': f"{info['production_utile']:.0f}",
+                    'Pénurie': f"{info['penurie']:.0f}",
+                    'Taux Couverture': f"{info['taux_couverture']:.1f}%"
+                })
+            
+            df_production = pd.DataFrame(production_summary)
+            st.dataframe(df_production, hide_index=True, use_container_width=True)
+            
+            # Graphique de la production pour ce scénario
+            st.write("### 📈 Visualisation de la Production")
+            
+            # Graphique en barres des quantités par référence et shift
+            plot_data = []
+            for t in range(params['T']):
+                shift_info = scenario_data['shifts_details'][t+1]
+                for ref, qty in shift_info['quantities'].items():
+                    if qty > 0:
+                        plot_data.append({
+                            'Shift': f'Shift {t+1}',
+                            'Référence': ref,
+                            'Quantité': qty
+                        })
+            
+            if plot_data:
+                df_plot = pd.DataFrame(plot_data)
+                fig = px.bar(df_plot, 
+                           x='Shift', 
+                           y='Quantité', 
+                           color='Référence',
+                           title=f"Production par Shift - Scénario {s+1}",
+                           text='Quantité')
+                fig.update_traces(texttemplate='%{text:.0f}', textposition='outside')
+                fig.update_layout(showlegend=True)
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Aucune production programmée pour ce scénario")
+    
+    # Comparaison rapide des scénarios
+    st.subheader("⚖️ Comparaison Rapide des Scénarios")
+    
+    comparison_data = []
+    for s, scenario_data in scenario_analysis.items():
+        kpis = scenario_data['kpis']
+        comparison_data.append({
+            'Scénario': f'S{s+1}',
+            'Satisfaction (%)': f"{kpis['satisfaction_globale']:.1f}",
+            'Utilisation (%)': f"{kpis['utilisation_capacite']:.1f}",
+            'Pénuries': f"{kpis['total_penuries']:.0f}",
+            'Coût': f"{kpis['cout_estime']:,.0f}"
+        })
+    
+    df_comparison = pd.DataFrame(comparison_data)
+    st.dataframe(df_comparison, hide_index=True, use_container_width=True)
 
 def dashboard_section(system, results):
     st.header("📊 Dashboard Comparatif")
@@ -1488,10 +1899,21 @@ def main():
         else:
             st.warning("⚠️ Aucun résultat à exporter")
     
-    # Footer
+    # Footer avec logos en bas de page
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #666; padding: 20px;'>
+        <div style='display: flex; justify-content: center; align-items: center; gap: 40px; margin-bottom: 15px;'>
+            <div style='display: flex; align-items: center; gap: 10px;'>
+                <span style='font-size: 24px;'>🏭</span>
+                <span style='font-weight: bold; color: #1f4e79;'>YAZAKI</span>
+            </div>
+            <div style='color: #ccc; font-size: 20px;'>×</div>
+            <div style='display: flex; align-items: center; gap: 10px;'>
+                <span style='font-size: 24px;'>🎓</span>
+                <span style='font-weight: bold; color: #2e86ab;'>ENSAM</span>
+            </div>
+        </div>
         🏭 Système Intégré Prédiction-Planification | 
         Développé avec ❤️ en Streamlit | 
         © 2024
