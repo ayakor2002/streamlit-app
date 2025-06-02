@@ -67,7 +67,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Classes du système intégré (copie des classes principales du code fourni)
 class MultiPosteDefectPredictor:
     def __init__(self):
         self.models = {}
@@ -376,13 +375,41 @@ class StochasticPlanningModelEnhanced:
         if R is None:
             R = [f'REF_{i+1:02d}' for i in range(10)]
 
+        # Demandes variables par scénario (incertitude de la demande)
         if EDI is None:
-            EDI = [20, 35, 45, 25, 40, 50, 22, 38, 30, 42]
+            base_demands = [20, 35, 45, 25, 40, 50, 22, 38, 30, 42]
+        else:
+            base_demands = EDI
 
-        EDI_dict = {R[i]: EDI[i] for i in range(len(R))}
+        # Créer des variations de demande par scénario
+        EDI_dict = {}
+        for i, ref in enumerate(R):
+            base_demand = base_demands[i] if i < len(base_demands) else 30
+            EDI_dict[ref] = base_demand  # Demande de base identique pour tous les scénarios
 
+        # Capacités variables par scénario (incertitude opérationnelle)
+        CAPchaine = {}
+        for s in range(S):
+            for t in range(T):
+                # Scénario 0: Capacité réduite (-10%)
+                # Scénario 1: Capacité nominale
+                # Scénario 2: Capacité élevée (+10%)
+                if s == 0:
+                    capacity_factor = 0.9  # Scénario pessimiste
+                elif s == 1:
+                    capacity_factor = 1.0  # Scénario nominal
+                else:
+                    capacity_factor = 1.1  # Scénario optimiste
+                
+                # Ajouter variation par shift
+                shift_variation = 1.0 + (t * 0.05)  # Shift 1: 100%, Shift 2: 105%, Shift 3: 110%
+                
+                CAPchaine[(s, t)] = mean_capacity * capacity_factor * shift_variation
+
+        # Matrices de coûts de changement variables (p)
         if p is None:
-            p = [
+            # Base matrix
+            base_p = [
                 [0.10, 0.20, 0.30, 0.15, 0.25, 0.35, 0.12, 0.22, 0.32, 0.18],
                 [0.20, 0.10, 0.40, 0.25, 0.35, 0.45, 0.22, 0.32, 0.42, 0.28],
                 [0.30, 0.40, 0.10, 0.35, 0.45, 0.55, 0.32, 0.42, 0.52, 0.38],
@@ -394,6 +421,12 @@ class StochasticPlanningModelEnhanced:
                 [0.32, 0.42, 0.52, 0.37, 0.47, 0.57, 0.34, 0.44, 0.10, 0.40],
                 [0.18, 0.28, 0.38, 0.23, 0.33, 0.43, 0.20, 0.30, 0.40, 0.10]
             ]
+            p = base_p
+
+        p_dict = {}
+        for i in range(len(R)):
+            for j in range(len(R)):
+                p_dict[(R[i], j)] = p[i][j]
 
         if D is None:
             D = [
@@ -409,36 +442,47 @@ class StochasticPlanningModelEnhanced:
                 [0.1, 0.6, 0.7, 0.4, 0.3, 0.6, 0.7, 0.5, 0.6, 1.0]
             ]
 
-        p_dict = {}
-        for i in range(len(R)):
-            for j in range(len(R)):
-                p_dict[(R[i], j)] = p[i][j]
-
         D_array = np.array(D)
 
-        CAPchaine = {}
-        for s in range(S):
-            for t in range(T):
-                CAPchaine[(s, t)] = mean_capacity
-
-        np.random.seed(42)
+        # Taux de défaut constant (basé sur prédiction)
         taux_defaut = {}
-
+        
         if use_predicted_rework and predicted_rework_rate is not None:
+            # GARDER LE MÊME TAUX pour tous les scénarios (vient de la prédiction)
+            base_rate = predicted_rework_rate / 100
             for s in range(S):
                 for i in R:
-                    taux_defaut[(s, i)] = predicted_rework_rate / 100
+                    taux_defaut[(s, i)] = base_rate  # IDENTIQUE pour tous les scénarios
             self.predicted_rework_rate = predicted_rework_rate
         else:
+            # Génération aléatoire classique
+            np.random.seed(42)
             for s in range(S):
                 for i in R:
                     defaut = max(0.01, min(0.3, np.random.normal(mean_defaut, std_defaut)))
                     taux_defaut[(s, i)] = defaut
 
+        # Paramètres variables par scénario
+        # Alpha rework peut varier (efficacité de récupération)
+        alpha_scenarios = {}
+        beta_scenarios = {}
+        
+        for s in range(S):
+            if s == 0:  # Scénario pessimiste
+                alpha_scenarios[s] = alpha_rework * 0.8  # Récupération moins efficace
+                beta_scenarios[s] = beta * 1.2  # Plus de temps pour le rework
+            elif s == 1:  # Scénario nominal
+                alpha_scenarios[s] = alpha_rework
+                beta_scenarios[s] = beta
+            else:  # Scénario optimiste
+                alpha_scenarios[s] = alpha_rework * 1.1  # Récupération plus efficace
+                beta_scenarios[s] = beta * 0.9  # Moins de temps pour le rework
+
         self.parameters = {
             'S': S, 'T': T, 'R': R, 'EDI': EDI_dict, 'p': p_dict, 'D': D_array,
             'seuil': seuil, 'CAPchaine': CAPchaine, 'm': m, 'taux_defaut': taux_defaut,
             'alpha_rework': alpha_rework, 'beta': beta, 'b': b, 'penalite_penurie': penalite_penurie,
+            'alpha_scenarios': alpha_scenarios, 'beta_scenarios': beta_scenarios,
             'mean_capacity': mean_capacity, 'std_capacity': std_capacity,
             'mean_defaut': mean_defaut, 'std_defaut': std_defaut,
             'use_predicted_rework': use_predicted_rework,
@@ -478,9 +522,12 @@ class StochasticPlanningModelEnhanced:
 
         for s in range(S):
             for i in R:
+                # Utiliser alpha variable par scénario
+                alpha_s = params['alpha_scenarios'][s]
+                
                 demande_satisfaite = plp.lpSum([
                     q[(s, i, t)] * (1 - params['taux_defaut'][(s, i)]) +
-                    params['alpha_rework'] * q[(s, i, t)] * params['taux_defaut'][(s, i)]
+                    alpha_s * q[(s, i, t)] * params['taux_defaut'][(s, i)]
                     for t in range(T)
                 ])
                 self.model += (
@@ -490,8 +537,11 @@ class StochasticPlanningModelEnhanced:
 
         for s in range(S):
             for t in range(T):
+                # Utiliser beta variable par scénario
+                beta_s = params['beta_scenarios'][s]
+                
                 capacite_utilisee = plp.lpSum([
-                    q[(s, i, t)] * (1 + params['beta'] * params['taux_defaut'][(s, i)])
+                    q[(s, i, t)] * (1 + beta_s * params['taux_defaut'][(s, i)])
                     for i in R
                 ])
                 self.model += (
@@ -499,6 +549,7 @@ class StochasticPlanningModelEnhanced:
                     f"Capacite_s{s}_t{t}"
                 )
 
+        # Contraintes de séquencement
         for s in range(S):
             for t in range(T):
                 for j in range(len(R)):
@@ -613,7 +664,12 @@ class StochasticPlanningModelEnhanced:
                 'shifts_details': {},
                 'production_summary': {},
                 'penalties': {},
-                'kpis': {}
+                'kpis': {},
+                'scenario_params': {
+                    'alpha_rework': params['alpha_scenarios'][s],
+                    'beta_factor': params['beta_scenarios'][s],
+                    'capacities': [params['CAPchaine'][(s, t)] for t in range(T)]
+                }
             }
 
             for t in range(T):
@@ -634,7 +690,8 @@ class StochasticPlanningModelEnhanced:
                     if qty > 0:
                         shift_info['quantities'][i] = qty
                         taux_def = params['taux_defaut'][(s, i)]
-                        capacity_used += qty * (1 + params['beta'] * taux_def)
+                        beta_s = params['beta_scenarios'][s]
+                        capacity_used += qty * (1 + beta_s * taux_def)
 
                 shift_info['capacity_used'] = capacity_used
                 shift_info['capacity_utilization'] = (capacity_used / shift_info['capacity_available']) * 100
@@ -647,7 +704,8 @@ class StochasticPlanningModelEnhanced:
                 for t in range(T):
                     qty = production[(s, i, t)]
                     taux_def = params['taux_defaut'][(s, i)]
-                    total_utile += qty * (1 - taux_def) + qty * taux_def * params['alpha_rework']
+                    alpha_s = params['alpha_scenarios'][s]
+                    total_utile += qty * (1 - taux_def) + qty * taux_def * alpha_s
 
                 penurie = penuries[(s, i)]
                 demande = params['EDI'][i]
@@ -882,31 +940,19 @@ def display_demo_data(demo_data):
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.metric(
-            "Nombre de jours",
-            len(demo_data)
-        )
+        st.metric("Nombre de jours", len(demo_data))
     
     with col2:
         volume_moyen = demo_data['Volume_production'].mean()
-        st.metric(
-            "Volume moyen",
-            f"{volume_moyen:.0f}"
-        )
+        st.metric("Volume moyen", f"{volume_moyen:.0f}")
     
     with col3:
         defauts_total = demo_data[['Poste1_defauts', 'Poste2_defauts', 'Poste3_defauts']].sum().sum()
-        st.metric(
-            "Total défauts",
-            f"{defauts_total:.0f}"
-        )
+        st.metric("Total défauts", f"{defauts_total:.0f}")
     
     with col4:
         taux_defaut_moyen = (defauts_total / demo_data['Volume_production'].sum()) * 100
-        st.metric(
-            "Taux défaut moyen",
-            f"{taux_defaut_moyen:.2f}%"
-        )
+        st.metric("Taux défaut moyen", f"{taux_defaut_moyen:.2f}%")
     
     # Aperçu des données
     with st.expander("👀 Aperçu des Données Générées", expanded=True):
@@ -920,122 +966,6 @@ def display_demo_data(demo_data):
             st.write("**Statistiques descriptives:**")
             stats_df = demo_data.describe().round(2)
             st.dataframe(stats_df)
-    
-    # Visualisations des données de démo
-    st.write("### 📈 Visualisations des Données")
-    
-    # Graphique 1: Évolution du volume de production
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        fig_volume = px.line(
-            demo_data, 
-            x=demo_data.index, 
-            y='Volume_production',
-            title="Évolution du Volume de Production",
-            labels={'x': 'Jours', 'Volume_production': 'Volume'}
-        )
-        fig_volume.update_traces(line=dict(color='blue', width=2))
-        st.plotly_chart(fig_volume, use_container_width=True)
-    
-    with col2:
-        # Graphique des défauts par poste
-        defauts_cols = ['Poste1_defauts', 'Poste2_defauts', 'Poste3_defauts']
-        fig_defauts = px.line(
-            demo_data, 
-            x=demo_data.index,
-            y=defauts_cols,
-            title="Évolution des Défauts par Poste",
-            labels={'x': 'Jours', 'value': 'Nombre de défauts', 'variable': 'Poste'}
-        )
-        st.plotly_chart(fig_defauts, use_container_width=True)
-    
-    # Graphiques supplémentaires
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        # Distribution du volume par jour de la semaine
-        volume_par_jour = demo_data.groupby('Jour')['Volume_production'].mean().reset_index()
-        volume_par_jour['Jour_nom'] = volume_par_jour['Jour'].map({
-            1: 'Lundi', 2: 'Mardi', 3: 'Mercredi', 4: 'Jeudi', 
-            5: 'Vendredi', 6: 'Samedi', 7: 'Dimanche'
-        })
-        
-        fig_jour = px.bar(
-            volume_par_jour,
-            x='Jour_nom',
-            y='Volume_production',
-            title="Volume Moyen par Jour de la Semaine",
-            color='Volume_production',
-            color_continuous_scale='viridis'
-        )
-        st.plotly_chart(fig_jour, use_container_width=True)
-    
-    with col2:
-        # Taux de défaut par poste
-        taux_defauts = []
-        for poste in defauts_cols:
-            taux = (demo_data[poste].sum() / demo_data['Volume_production'].sum()) * 100
-            taux_defauts.append({
-                'Poste': poste.replace('_defauts', ''),
-                'Taux_defaut': taux
-            })
-        
-        df_taux = pd.DataFrame(taux_defauts)
-        fig_taux = px.bar(
-            df_taux,
-            x='Poste',
-            y='Taux_defaut',
-            title="Taux de Défaut par Poste (%)",
-            color='Taux_defaut',
-            color_continuous_scale='reds'
-        )
-        fig_taux.update_layout(showlegend=False)
-        st.plotly_chart(fig_taux, use_container_width=True)
-    
-    # Corrélations
-    with st.expander("🔍 Analyse de Corrélation"):
-        st.write("**Matrice de corrélation entre les variables:**")
-        
-        # Calculer la matrice de corrélation
-        corr_matrix = demo_data[['Volume_production'] + defauts_cols].corr()
-        
-        # Créer un heatmap
-        fig_corr = px.imshow(
-            corr_matrix,
-            title="Matrice de Corrélation",
-            color_continuous_scale='RdBu_r',
-            aspect='auto'
-        )
-        fig_corr.update_layout(width=600, height=500)
-        st.plotly_chart(fig_corr, use_container_width=True)
-        
-        # Afficher la matrice numériquement
-        st.write("**Valeurs de corrélation:**")
-        st.dataframe(corr_matrix.round(3))
-    
-    # Résumé des caractéristiques
-    with st.expander("📋 Caractéristiques des Données de Démonstration"):
-        st.markdown("""
-        **🎯 Caractéristiques des données générées:**
-        
-        - **Période:** 100 jours simulés avec variation saisonnière
-        - **Volume de production:** 
-          - Jours ouvrables: ~1200 unités (± 100)
-          - Week-ends: ~800 unités (± 100)
-        - **Défauts par poste:**
-          - Poste1: ~2% du volume + variation jour + bruit
-          - Poste2: ~1.5% du volume + variation jour + bruit  
-          - Poste3: ~2.5% du volume + variation jour + bruit
-        - **Corrélations:** Les défauts sont corrélés au volume et au jour de la semaine
-        - **Réalisme:** Données basées sur des patterns industriels typiques
-        
-        **📊 Utilisation:**
-        Ces données permettent de tester le système de prédiction et de planification
-        avec des patterns réalistes de production industrielle.
-        """)
-    
-    st.success("✅ Données de démonstration prêtes pour l'analyse !")
 
 def create_demo_data(n_days=100):
     """Crée des données de démonstration avec des valeurs réalistes"""
@@ -1072,14 +1002,7 @@ def create_demo_data(n_days=100):
             'Poste3_defauts': poste3_defauts
         })
 
-    df = pd.DataFrame(data)
-    
-    # Vérification des données générées
-    print(f"Données de démo générées: {len(df)} lignes")
-    print(f"Colonnes: {list(df.columns)}")
-    print(f"Volume moyen: {df['Volume_production'].mean():.1f}")
-    
-    return df
+    return pd.DataFrame(data)
 
 def prediction_section(system, data):
     st.header("🔮 Prédiction de Défauts")
@@ -1132,30 +1055,7 @@ def prediction_section(system, data):
             )
         
         with col3:
-            st.metric(
-                "Nombre de Postes",
-                len(postes)
-            )
-        
-        # Graphique des taux par poste
-        if taux_historiques:
-            fig_taux = px.bar(
-                x=list(taux_historiques.keys()),
-                y=list(taux_historiques.values()),
-                title="Taux de Rework Historique par Poste",
-                labels={'x': 'Postes', 'y': 'Taux de Rework (%)'}
-            )
-            fig_taux.update_layout(showlegend=False)
-            st.plotly_chart(fig_taux, use_container_width=True)
-        
-        # Afficher les poids de pondération
-        with st.expander("⚖️ Poids de Pondération des Postes"):
-            if system.predictor.poste_weights:
-                weights_df = pd.DataFrame([
-                    {'Poste': poste, 'Poids': poids, 'Pourcentage': f"{poids*100:.2f}%"}
-                    for poste, poids in system.predictor.poste_weights.items()
-                ])
-                st.dataframe(weights_df)
+            st.metric("Nombre de Postes", len(postes))
         
         return True
     else:
@@ -1209,50 +1109,14 @@ def new_prediction_section(system):
         
         with col2:
             defauts_predits = pred_details['predictions_chaine']['moyenne_ponderee']
-            st.metric(
-                "Défauts Prédits",
-                f"{defauts_predits:.1f}"
-            )
+            st.metric("Défauts Prédits", f"{defauts_predits:.1f}")
         
         with col3:
-            st.metric(
-                "Volume Analysé",
-                f"{volume:,.0f}"
-            )
+            st.metric("Volume Analysé", f"{volume:,.0f}")
         
         with col4:
             jour_name = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'][jour-1]
-            st.metric(
-                "Jour Analysé",
-                jour_name
-            )
-        
-        # Graphique comparatif des méthodes
-        methodes = list(pred_details['taux_rework_chaine'].keys())
-        taux_values = list(pred_details['taux_rework_chaine'].values())
-        
-        fig_methodes = px.bar(
-            x=methodes,
-            y=taux_values,
-            title="Taux de Rework selon Différentes Méthodes",
-            labels={'x': 'Méthode', 'y': 'Taux de Rework (%)'}
-        )
-        fig_methodes.update_layout(showlegend=False)
-        st.plotly_chart(fig_methodes, use_container_width=True)
-        
-        # Détail par poste
-        with st.expander("🏭 Détail par Poste"):
-            postes_data = []
-            for poste, defauts in pred_details['predictions_postes'].items():
-                taux = pred_details['taux_rework_postes'][poste]
-                postes_data.append({
-                    'Poste': poste,
-                    'Défauts Prédits': f"{defauts:.1f}",
-                    'Taux Rework (%)': f"{taux:.2f}"
-                })
-            
-            df_postes = pd.DataFrame(postes_data)
-            st.dataframe(df_postes)
+            st.metric("Jour Analysé", jour_name)
         
         return prediction_result
     
@@ -1338,6 +1202,9 @@ def planning_section(system, prediction_result):
                     if results:
                         st.success("✅ Planification réussie!")
                         
+                        # Debug des paramètres
+                        planning_section_debug(system, prediction_result)
+                        
                         # Affichage immédiat des scénarios
                         display_scenario_details(system)
                         
@@ -1351,6 +1218,34 @@ def planning_section(system, prediction_result):
     
     return None
 
+def planning_section_debug(system, prediction_result):
+    """Version debug pour vérifier les paramètres"""
+    
+    if system.planner and hasattr(system.planner, 'parameters'):
+        params = system.planner.parameters
+        
+        st.write("### 🔍 Debug - Paramètres des Scénarios")
+        
+        # Afficher les capacités par scénario
+        st.write("**Capacités par scénario:**")
+        for s in range(params['S']):
+            capacites = [params['CAPchaine'][(s, t)] for t in range(params['T'])]
+            st.write(f"Scénario {s+1}: {capacites}")
+        
+        # Afficher les paramètres alpha et beta
+        st.write("**Paramètres Alpha/Beta par scénario:**")
+        for s in range(params['S']):
+            alpha = params['alpha_scenarios'][s]
+            beta = params['beta_scenarios'][s]
+            st.write(f"Scénario {s+1}: Alpha={alpha:.2f}, Beta={beta:.2f}")
+        
+        # Afficher quelques taux de défaut
+        st.write("**Taux de défaut (premiers 3 refs) - DOIT ÊTRE IDENTIQUE:**")
+        for s in range(params['S']):
+            taux = [f"{params['taux_defaut'][(s, ref)]*100:.2f}%" 
+                   for ref in params['R'][:3]]
+            st.write(f"Scénario {s+1}: {taux}")
+
 def display_scenario_details(system):
     """Affiche les détails de tous les scénarios avec positions et quantités"""
     st.subheader("🎯 Détails des Scénarios de Planification")
@@ -1361,6 +1256,12 @@ def display_scenario_details(system):
     
     scenario_analysis = system.planner.scenario_analysis
     params = system.planner.parameters
+    
+    # DEBUG: Vérifier les données avant affichage
+    st.write("🔍 **DIAGNOSTIC DES SCÉNARIOS:**")
+    for s, data in scenario_analysis.items():
+        kpis = data['kpis']
+        st.write(f"Scénario {s+1}: Satisfaction = {kpis['satisfaction_globale']:.2f}%, Coût = {kpis['cout_estime']:.0f}, Utilisation = {kpis['utilisation_capacite']:.2f}%")
     
     # Tabs pour chaque scénario
     tab_names = [f"Scénario {s+1}" for s in range(len(scenario_analysis))]
@@ -1382,15 +1283,32 @@ def display_scenario_details(system):
             with col4:
                 st.metric("Coût Estimé", f"{kpis['cout_estime']:,.0f}")
             
+            # Paramètres du scénario
+            st.write("**Paramètres du scénario:**")
+            scenario_params = scenario_data['scenario_params']
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.write(f"Alpha rework: {scenario_params['alpha_rework']:.2f}")
+            with col2:
+                st.write(f"Beta factor: {scenario_params['beta_factor']:.2f}")
+            with col3:
+                capacities = scenario_params['capacities']
+                st.write(f"Capacités: {[f'{c:.0f}' for c in capacities]}")
+            
             st.markdown("---")
             
             # Détails par shift
             st.write("### 📋 Plan d'Exécution par Shift")
             
             for t in range(params['T']):
-                shift_info = scenario_data['shifts_details'][t+1]
+                shift_key = t + 1
+                if shift_key not in scenario_data['shifts_details']:
+                    st.error(f"Données manquantes pour le shift {shift_key} du scénario {s+1}")
+                    continue
+                    
+                shift_info = scenario_data['shifts_details'][shift_key]
                 
-                st.write(f"#### 🔄 Shift {t+1}")
+                st.write(f"#### 🔄 Shift {t+1} - Scénario {s+1}")
                 
                 col1, col2 = st.columns([2, 1])
                 
@@ -1414,10 +1332,10 @@ def display_scenario_details(system):
                         quantities_data = []
                         for ref, qty in shift_info['quantities'].items():
                             if qty > 0:
-                                # Calculer la production utile
                                 taux_defaut = params['taux_defaut'][(s, ref)]
                                 prod_utile = qty * (1 - taux_defaut)
-                                prod_recuperee = qty * taux_defaut * params['alpha_rework']
+                                alpha_s = params['alpha_scenarios'][s]
+                                prod_recuperee = qty * taux_defaut * alpha_s
                                 total_utile = prod_utile + prod_recuperee
                                 
                                 quantities_data.append({
@@ -1460,52 +1378,6 @@ def display_scenario_details(system):
             
             df_production = pd.DataFrame(production_summary)
             st.dataframe(df_production, hide_index=True, use_container_width=True)
-            
-            # Graphique de la production pour ce scénario
-            st.write("### 📈 Visualisation de la Production")
-            
-            # Graphique en barres des quantités par référence et shift
-            plot_data = []
-            for t in range(params['T']):
-                shift_info = scenario_data['shifts_details'][t+1]
-                for ref, qty in shift_info['quantities'].items():
-                    if qty > 0:
-                        plot_data.append({
-                            'Shift': f'Shift {t+1}',
-                            'Référence': ref,
-                            'Quantité': qty
-                        })
-            
-            if plot_data:
-                df_plot = pd.DataFrame(plot_data)
-                fig = px.bar(df_plot, 
-                           x='Shift', 
-                           y='Quantité', 
-                           color='Référence',
-                           title=f"Production par Shift - Scénario {s+1}",
-                           text='Quantité')
-                fig.update_traces(texttemplate='%{text:.0f}', textposition='outside')
-                fig.update_layout(showlegend=True)
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("Aucune production programmée pour ce scénario")
-    
-    # Comparaison rapide des scénarios
-    st.subheader("⚖️ Comparaison Rapide des Scénarios")
-    
-    comparison_data = []
-    for s, scenario_data in scenario_analysis.items():
-        kpis = scenario_data['kpis']
-        comparison_data.append({
-            'Scénario': f'S{s+1}',
-            'Satisfaction (%)': f"{kpis['satisfaction_globale']:.1f}",
-            'Utilisation (%)': f"{kpis['utilisation_capacite']:.1f}",
-            'Pénuries': f"{kpis['total_penuries']:.0f}",
-            'Coût': f"{kpis['cout_estime']:,.0f}"
-        })
-    
-    df_comparison = pd.DataFrame(comparison_data)
-    st.dataframe(df_comparison, hide_index=True, use_container_width=True)
 
 def dashboard_section(system, results):
     st.header("📊 Dashboard Comparatif")
@@ -1519,6 +1391,35 @@ def dashboard_section(system, results):
         return
     
     scenario_analysis = system.planner.scenario_analysis
+    params = system.planner.parameters
+    
+    # Diagnostic des sources de différenciation
+    st.subheader("🔍 Sources de Différenciation entre Scénarios")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.write("**Capacités totales par scénario:**")
+        for s in range(params['S']):
+            total_cap = sum([params['CAPchaine'][(s, t)] for t in range(params['T'])])
+            st.write(f"S{s+1}: {total_cap:.0f}")
+    
+    with col2:
+        st.write("**Alpha rework (efficacité récupération):**")
+        for s in range(params['S']):
+            alpha = params['alpha_scenarios'][s]
+            st.write(f"S{s+1}: {alpha:.2f}")
+    
+    with col3:
+        st.write("**Beta factor (temps rework):**")
+        for s in range(params['S']):
+            beta = params['beta_scenarios'][s]
+            st.write(f"S{s+1}: {beta:.2f}")
+    
+    # Vérification du taux de rework constant
+    st.write("**✅ Taux de rework (constant - vient de la prédiction):**")
+    taux_rework = params['taux_defaut'][(0, params['R'][0])] * 100
+    st.write(f"Tous les scénarios: {taux_rework:.2f}%")
     
     # Vue d'ensemble
     st.subheader("🎯 Vue d'Ensemble")
@@ -1526,133 +1427,92 @@ def dashboard_section(system, results):
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.metric(
-            "Taux Rework Utilisé",
-            f"{results['predicted_rework_rate']:.2f}%"
-        )
+        st.metric("Taux Rework Utilisé", f"{results['predicted_rework_rate']:.2f}%")
     
     with col2:
-        st.metric(
-            "Coût Total Optimal",
-            f"{results['planning_results']['cout_total']:,.0f}"
-        )
+        st.metric("Coût Total Optimal", f"{results['planning_results']['cout_total']:,.0f}")
     
     with col3:
-        st.metric(
-            "Scénarios Analysés",
-            len(scenario_analysis)
-        )
+        st.metric("Scénarios Analysés", len(scenario_analysis))
     
     with col4:
-        params = system.planner.parameters
         demande_totale = sum(params['EDI'].values())
-        st.metric(
-            "Demande Totale",
-            f"{demande_totale:,.0f}"
-        )
+        st.metric("Demande Totale", f"{demande_totale:,.0f}")
     
-    # Comparaison des scénarios
-    st.subheader("📈 Comparaison des Scénarios")
+    # Comparaison des KPIs
+    st.subheader("📈 Comparaison des Performances")
     
-    # Préparer les données pour le graphique
     scenarios_data = []
     for s, data in scenario_analysis.items():
         kpis = data['kpis']
         scenarios_data.append({
             'Scénario': f'S{s+1}',
-            'Satisfaction (%)': kpis['satisfaction_globale'],
-            'Utilisation Capacité (%)': kpis['utilisation_capacite'],
-            'Total Pénuries': kpis['total_penuries'],
-            'Coût Estimé': kpis['cout_estime'],
-            'Efficacité': kpis['efficacite_production']
+            'Satisfaction (%)': round(kpis['satisfaction_globale'], 2),
+            'Utilisation (%)': round(kpis['utilisation_capacite'], 2),
+            'Coût': round(kpis['cout_estime'], 0),
+            'Pénuries': round(kpis['total_penuries'], 2)
         })
     
     df_scenarios = pd.DataFrame(scenarios_data)
     
-    # Graphiques comparatifs
+    # Vérification de la variance
+    variance_satisfaction = df_scenarios['Satisfaction (%)'].var()
+    variance_cout = df_scenarios['Coût'].var()
+    variance_utilisation = df_scenarios['Utilisation (%)'].var()
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        color = "🟢" if variance_satisfaction > 0.01 else "🔴"
+        st.write(f"{color} Variance Satisfaction: {variance_satisfaction:.4f}")
+    with col2:
+        color = "🟢" if variance_cout > 0.01 else "🔴"
+        st.write(f"{color} Variance Coût: {variance_cout:.4f}")
+    with col3:
+        color = "🟢" if variance_utilisation > 0.01 else "🔴"
+        st.write(f"{color} Variance Utilisation: {variance_utilisation:.4f}")
+    
+    # Affichage du tableau
+    st.dataframe(df_scenarios, use_container_width=True)
+    
+    # Graphiques
     col1, col2 = st.columns(2)
     
     with col1:
-        fig_satisfaction = px.bar(
-            df_scenarios,
-            x='Scénario',
-            y='Satisfaction (%)',
-            title="Taux de Satisfaction par Scénario",
-            color='Satisfaction (%)',
-            color_continuous_scale='viridis'
-        )
-        st.plotly_chart(fig_satisfaction, use_container_width=True)
+        fig = px.bar(df_scenarios, x='Scénario', y='Satisfaction (%)', 
+                     title="Satisfaction par Scénario", text='Satisfaction (%)')
+        fig.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
+        st.plotly_chart(fig, use_container_width=True)
     
     with col2:
-        fig_capacite = px.bar(
-            df_scenarios,
-            x='Scénario',
-            y='Utilisation Capacité (%)',
-            title="Utilisation de la Capacité par Scénario",
-            color='Utilisation Capacité (%)',
-            color_continuous_scale='plasma'
-        )
-        st.plotly_chart(fig_capacite, use_container_width=True)
+        fig = px.bar(df_scenarios, x='Scénario', y='Coût', 
+                     title="Coût par Scénario", text='Coût')
+        fig.update_traces(texttemplate='%{text:.0f}', textposition='outside')
+        st.plotly_chart(fig, use_container_width=True)
     
-    # Graphique radar comparatif
-    st.subheader("🕸️ Analyse Radar des Performances")
+    # Graphique d'utilisation de capacité
+    fig = px.bar(df_scenarios, x='Scénario', y='Utilisation (%)', 
+                 title="Utilisation de la Capacité par Scénario", text='Utilisation (%)')
+    fig.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
+    st.plotly_chart(fig, use_container_width=True)
     
-    # Normaliser les données pour le radar
-    metrics = ['Satisfaction (%)', 'Utilisation Capacité (%)', 'Efficacité']
-    fig_radar = go.Figure()
-    
-    colors = ['red', 'blue', 'green', 'orange', 'purple']
-    
-    for i, row in df_scenarios.iterrows():
-        # Normaliser l'efficacité sur 100
-        efficacite_norm = min(100, row['Efficacité'] * 100)
-        penuries_norm = max(0, 100 - (row['Total Pénuries'] / demande_totale * 100))
-        
-        values = [
-            row['Satisfaction (%)'],
-            row['Utilisation Capacité (%)'],
-            efficacite_norm,
-            penuries_norm
-        ]
-        
-        fig_radar.add_trace(go.Scatterpolar(
-            r=values + [values[0]],  # Fermer le polygone
-            theta=['Satisfaction', 'Utilisation Capacité', 'Efficacité', 'Anti-Pénuries'] + ['Satisfaction'],
-            fill='toself',
-            name=row['Scénario'],
-            line_color=colors[i % len(colors)]
-        ))
-    
-    fig_radar.update_layout(
-        polar=dict(
-            radialaxis=dict(
-                visible=True,
-                range=[0, 100]
-            )),
-        showlegend=True,
-        title="Comparaison Multi-Critères des Scénarios"
-    )
-    
-    st.plotly_chart(fig_radar, use_container_width=True)
-    
-    # Sélection et détail du meilleur scénario
-    st.subheader("🏆 Meilleur Scénario")
+    # Analyse du meilleur scénario
+    st.subheader("🏆 Analyse du Meilleur Scénario")
     
     # Calcul du score global
     scores_globaux = {}
+    demande_totale = sum(params['EDI'].values())
+    
     for i, row in df_scenarios.iterrows():
         satisfaction_norm = row['Satisfaction (%)'] / 100
-        utilisation_norm = row['Utilisation Capacité (%)'] / 100
-        penuries_norm = 1 - (row['Total Pénuries'] / demande_totale)
-        cout_norm = 1 - (row['Coût Estimé'] / df_scenarios['Coût Estimé'].max())
-        efficacite_norm = row['Efficacité'] / df_scenarios['Efficacité'].max()
+        utilisation_norm = row['Utilisation (%)'] / 100
+        penuries_norm = 1 - (row['Pénuries'] / demande_totale) if demande_totale > 0 else 1
+        cout_norm = 1 - (row['Coût'] / df_scenarios['Coût'].max()) if df_scenarios['Coût'].max() > 0 else 0
         
         score_global = (
             0.30 * satisfaction_norm +
-            0.20 * utilisation_norm +
+            0.25 * utilisation_norm +
             0.25 * penuries_norm +
-            0.15 * cout_norm +
-            0.10 * efficacite_norm
+            0.20 * cout_norm
         )
         
         scores_globaux[row['Scénario']] = score_global
@@ -1664,11 +1524,7 @@ def dashboard_section(system, results):
     col1, col2 = st.columns([1, 2])
     
     with col1:
-        st.metric(
-            "Meilleur Scénario",
-            best_scenario_name,
-            f"Score: {best_score:.3f}"
-        )
+        st.metric("Meilleur Scénario", best_scenario_name, f"Score: {best_score:.3f}")
         
         best_data = scenario_analysis[best_scenario_id]
         best_kpis = best_data['kpis']
@@ -1683,28 +1539,17 @@ def dashboard_section(system, results):
         st.write("**Plan d'Exécution Recommandé:**")
         
         for t in range(system.planner.parameters['T']):
-            shift_info = best_data['shifts_details'][t+1]
-            ordre = ' → '.join([ref for ref in shift_info['execution_order'] if ref != 'VIDE'])
-            
-            st.write(f"**Shift {t+1}:** {ordre}")
-            
-            if shift_info['quantities']:
-                for ref, qty in shift_info['quantities'].items():
-                    if qty > 0:
-                        st.write(f"  • {ref}: {int(qty)} unités")
-    
-    # Tableau détaillé
-    st.subheader("📋 Tableau Détaillé des Scénarios")
-    
-    # Ajouter les scores au dataframe
-    df_scenarios['Score Global'] = [scores_globaux[scenario] for scenario in df_scenarios['Scénario']]
-    df_scenarios = df_scenarios.sort_values('Score Global', ascending=False)
-    
-    st.dataframe(
-        df_scenarios,
-        use_container_width=True,
-        hide_index=True
-    )
+            shift_key = t + 1
+            if shift_key in best_data['shifts_details']:
+                shift_info = best_data['shifts_details'][shift_key]
+                ordre = ' → '.join([ref for ref in shift_info['execution_order'] if ref != 'VIDE'])
+                
+                st.write(f"**Shift {t+1}:** {ordre}")
+                
+                if shift_info['quantities']:
+                    for ref, qty in shift_info['quantities'].items():
+                        if qty > 0:
+                            st.write(f"  • {ref}: {int(qty)} unités")
 
 def export_section(system, results):
     st.header("📁 Export des Résultats")
@@ -1914,9 +1759,11 @@ def main():
                 <span style='font-weight: bold; color: #2e86ab;'>ENSAM</span>
             </div>
         </div>
-        🏭 Système Intégré Prédiction-Planification | 
-        Développé avec ❤️ en Streamlit | 
-        © 2024
+        <div style='color: #666; margin-top: 8px; font-size: 14px; font-style: italic;'>
+            🏭 Système Intégré Prédiction-Planification | 
+            Développé avec ❤️ en Streamlit | 
+            © 2024
+        </div>
     </div>
     """, unsafe_allow_html=True)
 
