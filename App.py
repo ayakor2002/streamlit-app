@@ -19,12 +19,15 @@ import joblib
 import pulp as plp
 from itertools import product
 from typing import Dict, List, Tuple, Any
+import matplotlib.pyplot as plt
+import seaborn as sns
+from math import pi
 import warnings
 warnings.filterwarnings('ignore')
 
 # Configuration de la page Streamlit
 st.set_page_config(
-    page_title="Système Intégré Prédiction-Planification",
+    page_title="Système Intégré Prédiction-Planification Avancé",
     page_icon="🏭",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -343,91 +346,83 @@ class MultiPosteDefectPredictor:
 
         return prediction_record
 
-class StochasticPlanningModelEnhanced:
+class StochasticPlanningModelComplete:
+    """
+    Modèle de planification stochastique avancé avec analyse multicritères
+    Adapté pour l'intégration avec la prédiction de défauts
+    """
+
     def __init__(self):
+        """Initialisation du modèle"""
         self.model = None
         self.variables = {}
         self.results = {}
         self.parameters = {}
         self.scenario_analysis = {}
+        self.multicriteria_scores = {}
+        self.best_scenario_selection = {}
         self.predicted_rework_rate = None
 
     def set_parameters(self,
-                      S: int = 3,
+                      S: int = 5,
                       T: int = 3,
                       R: List[str] = None,
                       EDI: List = None,
                       p: List[List] = None,
                       D: List[List] = None,
                       seuil: float = 0.95,
-                      mean_capacity: float = 200,
-                      std_capacity: float = 20,
-                      mean_defaut: float = 0.1,
-                      std_defaut: float = 0.02,
+                      mean_capacity: float = 160,
+                      std_capacity: float = 10,
+                      mean_defaut: float = 0.04,
+                      std_defaut: float = 0.01,
                       m: int = 5,
                       alpha_rework: float = 0.8,
                       beta: float = 1.2,
                       b: int = 10,
                       penalite_penurie: float = 1000,
+                      # Paramètres analyse multicritères
+                      poids_cout: float = 0.25,
+                      poids_satisfaction: float = 0.30,
+                      poids_utilisation: float = 0.20,
+                      poids_stabilite: float = 0.15,
+                      poids_penuries: float = 0.10,
+                      # Nouveaux paramètres pour l'intégration
                       use_predicted_rework: bool = False,
                       predicted_rework_rate: float = None):
+        """
+        Configuration complète du modèle avec intégration des prédictions
+        """
 
+        # 10 références par défaut
         if R is None:
             R = [f'REF_{i+1:02d}' for i in range(10)]
 
-        # Demandes variables par scénario (incertitude de la demande)
+        # Demande client par défaut pour 10 références
         if EDI is None:
-            base_demands = [20, 35, 45, 25, 40, 50, 22, 38, 30, 42]
+            EDI = [20, 35, 45, 25, 40, 50, 22, 38, 30, 42]
+
+        # Si des demandes personnalisées sont fournies sous forme de liste
+        if isinstance(EDI, list):
+            EDI_dict = {R[i]: EDI[i] for i in range(min(len(R), len(EDI)))}
         else:
-            base_demands = EDI
+            EDI_dict = EDI
 
-        # Créer des variations de demande par scénario
-        EDI_dict = {}
-        for i, ref in enumerate(R):
-            base_demand = base_demands[i] if i < len(base_demands) else 30
-            EDI_dict[ref] = base_demand  # Demande de base identique pour tous les scénarios
-
-        # Capacités variables par scénario (incertitude opérationnelle)
-        CAPchaine = {}
-        for s in range(S):
-            for t in range(T):
-                # Scénario 0: Capacité réduite (-10%)
-                # Scénario 1: Capacité nominale
-                # Scénario 2: Capacité élevée (+10%)
-                if s == 0:
-                    capacity_factor = 0.9  # Scénario pessimiste
-                elif s == 1:
-                    capacity_factor = 1.0  # Scénario nominal
-                else:
-                    capacity_factor = 1.1  # Scénario optimiste
-                
-                # Ajouter variation par shift
-                shift_variation = 1.0 + (t * 0.05)  # Shift 1: 100%, Shift 2: 105%, Shift 3: 110%
-                
-                CAPchaine[(s, t)] = mean_capacity * capacity_factor * shift_variation
-
-        # Matrices de coûts de changement variables (p)
+        # Matrice P (différence de MH) 10x10
         if p is None:
-            # Base matrix
-            base_p = [
-                [0.10, 0.20, 0.30, 0.15, 0.25, 0.35, 0.12, 0.22, 0.32, 0.18],
-                [0.20, 0.10, 0.40, 0.25, 0.35, 0.45, 0.22, 0.32, 0.42, 0.28],
-                [0.30, 0.40, 0.10, 0.35, 0.45, 0.55, 0.32, 0.42, 0.52, 0.38],
-                [0.15, 0.25, 0.35, 0.10, 0.30, 0.40, 0.17, 0.27, 0.37, 0.23],
-                [0.25, 0.35, 0.45, 0.30, 0.10, 0.50, 0.27, 0.37, 0.47, 0.33],
-                [0.35, 0.45, 0.55, 0.40, 0.50, 0.10, 0.37, 0.47, 0.57, 0.43],
-                [0.12, 0.22, 0.32, 0.17, 0.27, 0.37, 0.10, 0.24, 0.34, 0.20],
-                [0.22, 0.32, 0.42, 0.27, 0.37, 0.47, 0.24, 0.10, 0.44, 0.30],
-                [0.32, 0.42, 0.52, 0.37, 0.47, 0.57, 0.34, 0.44, 0.10, 0.40],
-                [0.18, 0.28, 0.38, 0.23, 0.33, 0.43, 0.20, 0.30, 0.40, 0.10]
+            p = [
+                [0, 0.20, 0.30, 0.15, 0.25, 0.35, 0.12, 0.22, 0.32, 0.18],
+                [0.20, 0, 0.40, 0.25, 0.35, 0.45, 0.22, 0.32, 0.42, 0.28],
+                [0.30, 0.40, 0, 0.35, 0.45, 0.55, 0.32, 0.42, 0.52, 0.38],
+                [0.15, 0.25, 0.35, 0, 0.30, 0.40, 0.17, 0.27, 0.37, 0.23],
+                [0.25, 0.35, 0.45, 0.30, 0, 0.50, 0.27, 0.37, 0.47, 0.33],
+                [0.35, 0.45, 0.55, 0.40, 0.50, 0, 0.37, 0.47, 0.57, 0.43],
+                [0.12, 0.22, 0.32, 0.17, 0.27, 0.37, 0, 0.24, 0.34, 0.20],
+                [0.22, 0.32, 0.42, 0.27, 0.37, 0.47, 0.24, 0, 0.44, 0.30],
+                [0.32, 0.42, 0.52, 0.37, 0.47, 0.57, 0.34, 0.44, 0, 0.40],
+                [0.18, 0.28, 0.38, 0.23, 0.33, 0.43, 0.20, 0.30, 0.40, 0]
             ]
-            p = base_p
 
-        p_dict = {}
-        for i in range(len(R)):
-            for j in range(len(R)):
-                p_dict[(R[i], j)] = p[i][j]
-
+        # Matrice D (similarité) 10x10
         if D is None:
             D = [
                 [1.0, 0.2, 0.4, 0.3, 0.1, 0.5, 0.2, 0.3, 0.4, 0.1],
@@ -442,65 +437,72 @@ class StochasticPlanningModelEnhanced:
                 [0.1, 0.6, 0.7, 0.4, 0.3, 0.6, 0.7, 0.5, 0.6, 1.0]
             ]
 
+        # Conversion en dictionnaire pour PuLP
+        p_dict = {}
+        for i in range(len(R)):
+            for j in range(len(R)):
+                p_dict[(R[i], j)] = p[i][j]
+
         D_array = np.array(D)
 
-        # Taux de défaut constant (basé sur prédiction)
+        # Génération stochastique des paramètres
+        np.random.seed(42)
+        
+        # Taux de défaut - MODIFICATION POUR INTÉGRATION
         taux_defaut = {}
         
         if use_predicted_rework and predicted_rework_rate is not None:
-            # GARDER LE MÊME TAUX pour tous les scénarios (vient de la prédiction)
-            base_rate = predicted_rework_rate / 100
-            for s in range(S):
-                for i in R:
-                    taux_defaut[(s, i)] = base_rate  # IDENTIQUE pour tous les scénarios
+            # Utiliser le taux prédit pour TOUS les scénarios (constant)
+            base_rate = predicted_rework_rate / 100  # Conversion de pourcentage
             self.predicted_rework_rate = predicted_rework_rate
-        else:
-            # Génération aléatoire classique
-            np.random.seed(42)
+            
             for s in range(S):
                 for i in R:
-                    defaut = max(0.01, min(0.3, np.random.normal(mean_defaut, std_defaut)))
+                    # Même taux pour tous les scénarios (vient de la prédiction)
+                    taux_defaut[(s, i)] = base_rate
+        else:
+            # Génération stochastique classique
+            for s in range(S):
+                for i in R:
+                    defaut = max(0.001, min(0.25, np.random.normal(mean_defaut, std_defaut)))
                     taux_defaut[(s, i)] = defaut
 
-        # Paramètres variables par scénario
-        # Alpha rework peut varier (efficacité de récupération)
-        alpha_scenarios = {}
-        beta_scenarios = {}
-        
+        # Capacités stochastiques selon spécifications
+        CAPchaine = {}
         for s in range(S):
-            if s == 0:  # Scénario pessimiste
-                alpha_scenarios[s] = alpha_rework * 0.8  # Récupération moins efficace
-                beta_scenarios[s] = beta * 1.2  # Plus de temps pour le rework
-            elif s == 1:  # Scénario nominal
-                alpha_scenarios[s] = alpha_rework
-                beta_scenarios[s] = beta
-            else:  # Scénario optimiste
-                alpha_scenarios[s] = alpha_rework * 1.1  # Récupération plus efficace
-                beta_scenarios[s] = beta * 0.9  # Moins de temps pour le rework
+            for t in range(T):
+                capacite = max(50, np.random.normal(mean_capacity, std_capacity))
+                CAPchaine[(s, t)] = capacite
 
         self.parameters = {
             'S': S, 'T': T, 'R': R, 'EDI': EDI_dict, 'p': p_dict, 'D': D_array,
             'seuil': seuil, 'CAPchaine': CAPchaine, 'm': m, 'taux_defaut': taux_defaut,
             'alpha_rework': alpha_rework, 'beta': beta, 'b': b, 'penalite_penurie': penalite_penurie,
-            'alpha_scenarios': alpha_scenarios, 'beta_scenarios': beta_scenarios,
             'mean_capacity': mean_capacity, 'std_capacity': std_capacity,
             'mean_defaut': mean_defaut, 'std_defaut': std_defaut,
+            'poids_cout': poids_cout, 'poids_satisfaction': poids_satisfaction,
+            'poids_utilisation': poids_utilisation, 'poids_stabilite': poids_stabilite,
+            'poids_penuries': poids_penuries,
             'use_predicted_rework': use_predicted_rework,
             'predicted_rework_rate': predicted_rework_rate
         }
 
     def create_model(self):
+        """Création du modèle d'optimisation"""
         params = self.parameters
         S, T, R = params['S'], params['T'], params['R']
 
-        self.model = plp.LpProblem("Planification_Stochastique", plp.LpMinimize)
+        self.model = plp.LpProblem("Planification_Stochastique_Complete", plp.LpMinimize)
 
+        # Variables de décision
+        # Variables binaires de séquencement
         self.variables['x'] = plp.LpVariable.dicts(
             "x",
             [(i, j, s, t) for i in R for j in range(len(R)) for s in range(S) for t in range(T)],
             cat='Binary'
         )
 
+        # Variables continues de production
         self.variables['q'] = plp.LpVariable.dicts(
             "q",
             [(s, i, t) for s in range(S) for i in R for t in range(T)],
@@ -508,6 +510,7 @@ class StochasticPlanningModelEnhanced:
             cat='Continuous'
         )
 
+        # Variables de pénurie
         self.variables['penurie'] = plp.LpVariable.dicts(
             "penurie",
             [(s, i) for s in range(S) for i in R],
@@ -516,18 +519,17 @@ class StochasticPlanningModelEnhanced:
         )
 
     def add_constraints(self):
+        """Ajout des contraintes du modèle"""
         params = self.parameters
         S, T, R = params['S'], params['T'], params['R']
         x, q, penurie = self.variables['x'], self.variables['q'], self.variables['penurie']
 
+        # 1. Satisfaction de la demande avec rework
         for s in range(S):
             for i in R:
-                # Utiliser alpha variable par scénario
-                alpha_s = params['alpha_scenarios'][s]
-                
                 demande_satisfaite = plp.lpSum([
                     q[(s, i, t)] * (1 - params['taux_defaut'][(s, i)]) +
-                    alpha_s * q[(s, i, t)] * params['taux_defaut'][(s, i)]
+                    params['alpha_rework'] * q[(s, i, t)] * params['taux_defaut'][(s, i)]
                     for t in range(T)
                 ])
                 self.model += (
@@ -535,13 +537,11 @@ class StochasticPlanningModelEnhanced:
                     f"Demande_s{s}_i{i}"
                 )
 
+        # 2. Contraintes de capacité
         for s in range(S):
             for t in range(T):
-                # Utiliser beta variable par scénario
-                beta_s = params['beta_scenarios'][s]
-                
                 capacite_utilisee = plp.lpSum([
-                    q[(s, i, t)] * (1 + beta_s * params['taux_defaut'][(s, i)])
+                    q[(s, i, t)] * (1 + params['beta'] * params['taux_defaut'][(s, i)])
                     for i in R
                 ])
                 self.model += (
@@ -549,50 +549,61 @@ class StochasticPlanningModelEnhanced:
                     f"Capacite_s{s}_t{t}"
                 )
 
-        # Contraintes de séquencement
+        # 3. Contraintes de séquencement
         for s in range(S):
             for t in range(T):
+                # Une référence par position
                 for j in range(len(R)):
                     self.model += (
                         plp.lpSum([x[(i, j, s, t)] for i in R]) == 1,
-                        f"Une_ref_par_position_s{s}_t{t}_j{j}"
+                        f"Position_s{s}_t{t}_j{j}"
                     )
-
-        for s in range(S):
-            for t in range(T):
+                
+                # Une position par référence (max)
                 for i in R:
                     self.model += (
                         plp.lpSum([x[(i, j, s, t)] for j in range(len(R))]) <= 1,
-                        f"Une_position_par_ref_s{s}_t{t}_i{i}"
+                        f"Reference_s{s}_t{t}_i{i}"
                     )
 
+        # 4. Production minimale
         for s in range(S):
             for i in R:
                 for t in range(T):
-                    production_requise = params['m'] / (1 - params['taux_defaut'][(s, i)])
+                    taux_defaut_si = params['taux_defaut'][(s, i)]
+                    if taux_defaut_si < 0.99:
+                        production_requise = params['m'] / (1 - taux_defaut_si + params['alpha_rework'] * taux_defaut_si)
+                    else:
+                        production_requise = params['m'] * 2
+                    
                     self.model += (
                         q[(s, i, t)] >= production_requise * plp.lpSum([x[(i, j, s, t)] for j in range(len(R))]),
                         f"Production_min_s{s}_i{i}_t{t}"
                     )
 
     def set_objective(self):
+        """Définition de la fonction objectif"""
         params = self.parameters
         S, T, R = params['S'], params['T'], params['R']
         q, penurie = self.variables['q'], self.variables['penurie']
 
+        # Coût de production
         cout_production = plp.lpSum([
             20 * q[(s, i, t)]
             for s in range(S) for i in R for t in range(T)
         ])
 
+        # Coût des pénuries
         cout_penuries = plp.lpSum([
             params['penalite_penurie'] * penurie[(s, i)]
             for s in range(S) for i in R
         ])
 
+        # Objectif : minimiser les coûts totaux
         self.model += cout_production + cout_penuries
 
     def solve_model(self, solver_name='PULP_CBC_CMD', time_limit=300):
+        """Résolution du modèle"""
         try:
             if solver_name == 'PULP_CBC_CMD':
                 solver = plp.PULP_CBC_CMD(timeLimit=time_limit, msg=0)
@@ -612,22 +623,28 @@ class StochasticPlanningModelEnhanced:
             return False
 
     def _extract_results(self):
+        """Extraction des résultats de la solution"""
         params = self.parameters
         S, T, R = params['S'], params['T'], params['R']
 
+        # Production par scénario
         production_results = {}
         for s in range(S):
             for i in R:
                 for t in range(T):
                     key = (s, i, t)
-                    production_results[key] = self.variables['q'][key].value() or 0
+                    value = self.variables['q'][key].value()
+                    production_results[key] = value if value is not None else 0
 
+        # Pénuries par scénario
         penuries_results = {}
         for s in range(S):
             for i in R:
                 key = (s, i)
-                penuries_results[key] = self.variables['penurie'][key].value() or 0
+                value = self.variables['penurie'][key].value()
+                penuries_results[key] = value if value is not None else 0
 
+        # Séquencement par scénario
         sequencement_results = {}
         for s in range(S):
             for t in range(T):
@@ -635,7 +652,8 @@ class StochasticPlanningModelEnhanced:
                 for i in R:
                     for j in range(len(R)):
                         key = (i, j, s, t)
-                        if self.variables['x'][key].value() and self.variables['x'][key].value() > 0.5:
+                        value = self.variables['x'][key].value()
+                        if value is not None and value > 0.5:
                             sequence[j] = i
                 sequencement_results[(s, t)] = sequence
 
@@ -647,6 +665,7 @@ class StochasticPlanningModelEnhanced:
         }
 
     def analyze_scenarios_detailed(self):
+        """Analyse détaillée des scénarios pour Streamlit"""
         if not self.results:
             return
 
@@ -663,14 +682,12 @@ class StochasticPlanningModelEnhanced:
                 'scenario_id': s + 1,
                 'shifts_details': {},
                 'production_summary': {},
-                'penalties': {},
-                'kpis': {},
-                'scenario_params': {
-                    'alpha_rework': params['alpha_scenarios'][s],
-                    'beta_factor': params['beta_scenarios'][s],
-                    'capacities': [params['CAPchaine'][(s, t)] for t in range(T)]
-                }
+                'kpis': {}
             }
+
+            # Analyse par shift
+            total_capacity_used = 0
+            total_capacity_available = 0
 
             for t in range(T):
                 shift_info = {
@@ -680,32 +697,50 @@ class StochasticPlanningModelEnhanced:
                     'capacity_available': params['CAPchaine'][(s, t)]
                 }
 
+                # Ordre d'exécution
                 sequence = sequencement.get((s, t), {})
-                ordered_refs = [sequence.get(j, 'VIDE') for j in range(len(R))]
+                ordered_refs = []
+                for j in range(len(R)):
+                    ref = sequence.get(j, 'VIDE')
+                    ordered_refs.append(ref)
                 shift_info['execution_order'] = ordered_refs
 
+                # Quantités et capacité utilisée
                 capacity_used = 0
                 for i in R:
                     qty = production[(s, i, t)]
                     if qty > 0:
                         shift_info['quantities'][i] = qty
                         taux_def = params['taux_defaut'][(s, i)]
-                        beta_s = params['beta_scenarios'][s]
-                        capacity_used += qty * (1 + beta_s * taux_def)
+                        capacity_used += qty * (1 + params['beta'] * taux_def)
 
                 shift_info['capacity_used'] = capacity_used
-                shift_info['capacity_utilization'] = (capacity_used / shift_info['capacity_available']) * 100
+                if shift_info['capacity_available'] > 0:
+                    shift_info['capacity_utilization'] = (capacity_used / shift_info['capacity_available']) * 100
+                else:
+                    shift_info['capacity_utilization'] = 0
+
+                total_capacity_used += capacity_used
+                total_capacity_available += shift_info['capacity_available']
 
                 scenario_data['shifts_details'][t+1] = shift_info
 
+            # Résumé production par référence
+            total_production_utile = 0
+            total_demande = sum(params['EDI'].values())
+            total_penuries = 0
+
             for i in R:
                 total_prod = sum(production[(s, i, t)] for t in range(T))
+                
+                # Production utile avec rework
                 total_utile = 0
                 for t in range(T):
                     qty = production[(s, i, t)]
                     taux_def = params['taux_defaut'][(s, i)]
-                    alpha_s = params['alpha_scenarios'][s]
-                    total_utile += qty * (1 - taux_def) + qty * taux_def * alpha_s
+                    pieces_bonnes = qty * (1 - taux_def)
+                    pieces_rework_ok = qty * taux_def * params['alpha_rework']
+                    total_utile += pieces_bonnes + pieces_rework_ok
 
                 penurie = penuries[(s, i)]
                 demande = params['EDI'][i]
@@ -719,25 +754,126 @@ class StochasticPlanningModelEnhanced:
                     'taux_couverture': taux_couverture
                 }
 
-            total_production_utile = sum([data['production_utile'] for data in scenario_data['production_summary'].values()])
-            total_demande = sum([data['demande'] for data in scenario_data['production_summary'].values()])
-            total_penuries = sum([data['penurie'] for data in scenario_data['production_summary'].values()])
+                total_production_utile += total_utile
+                total_penuries += penurie
 
-            total_capacity_used = sum([shift['capacity_used'] for shift in scenario_data['shifts_details'].values()])
-            total_capacity_available = sum([shift['capacity_available'] for shift in scenario_data['shifts_details'].values()])
+            # Calcul des KPIs du scénario
+            cout_production = sum([production[(s, i, t)] * 20 for i in R for t in range(T)])
+            cout_penuries = total_penuries * params['penalite_penurie']
+            cout_total = cout_production + cout_penuries
 
-            cout_scenario = sum([production[(s, i, t)] * 20 for i in R for t in range(T)]) + total_penuries * params['penalite_penurie']
+            # Stabilité (variance des productions par shift)
+            productions_par_shift = []
+            for t in range(T):
+                prod_shift = sum(production[(s, i, t)] for i in R)
+                productions_par_shift.append(prod_shift)
+            
+            if len(productions_par_shift) > 1:
+                variance_production = np.var(productions_par_shift)
+                stabilite = max(0, 100 - variance_production / 10)
+            else:
+                stabilite = 100
 
             scenario_kpis = {
                 'satisfaction_globale': (total_production_utile / total_demande) * 100 if total_demande > 0 else 0,
                 'utilisation_capacite': (total_capacity_used / total_capacity_available) * 100 if total_capacity_available > 0 else 0,
                 'total_penuries': total_penuries,
-                'cout_estime': cout_scenario,
+                'cout_total': cout_total,
+                'cout_production': cout_production,
+                'cout_penuries': cout_penuries,
+                'stabilite': stabilite,
                 'efficacite_production': total_production_utile / max(1, total_capacity_used)
             }
 
             scenario_data['kpis'] = scenario_kpis
             self.scenario_analysis[s] = scenario_data
+
+    def calculate_multicriteria_scores(self):
+        """Calcul des scores multicritères"""
+        if not self.scenario_analysis:
+            return
+
+        params = self.parameters
+        S = params['S']
+
+        # Extraction des valeurs des critères
+        criteria_values = {
+            'cout': [self.scenario_analysis[s]['kpis']['cout_total'] for s in range(S)],
+            'satisfaction': [self.scenario_analysis[s]['kpis']['satisfaction_globale'] for s in range(S)],
+            'utilisation': [self.scenario_analysis[s]['kpis']['utilisation_capacite'] for s in range(S)],
+            'stabilite': [self.scenario_analysis[s]['kpis']['stabilite'] for s in range(S)],
+            'penuries': [self.scenario_analysis[s]['kpis']['total_penuries'] for s in range(S)]
+        }
+
+        # Normalisation des critères
+        def normalize_criterion(values, inverse=False):
+            min_val, max_val = min(values), max(values)
+            if max_val == min_val:
+                return [1.0] * len(values)
+            
+            if inverse:
+                return [(max_val - v) / (max_val - min_val) for v in values]
+            else:
+                return [(v - min_val) / (max_val - min_val) for v in values]
+
+        normalized_criteria = {
+            'cout': normalize_criterion(criteria_values['cout'], inverse=True),
+            'satisfaction': normalize_criterion(criteria_values['satisfaction'], inverse=False),
+            'utilisation': normalize_criterion(criteria_values['utilisation'], inverse=False),
+            'stabilite': normalize_criterion(criteria_values['stabilite'], inverse=False),
+            'penuries': normalize_criterion(criteria_values['penuries'], inverse=True)
+        }
+
+        # Calcul des scores globaux pondérés
+        global_scores = {}
+        for s in range(S):
+            score = (
+                params['poids_cout'] * normalized_criteria['cout'][s] +
+                params['poids_satisfaction'] * normalized_criteria['satisfaction'][s] +
+                params['poids_utilisation'] * normalized_criteria['utilisation'][s] +
+                params['poids_stabilite'] * normalized_criteria['stabilite'][s] +
+                params['poids_penuries'] * normalized_criteria['penuries'][s]
+            )
+            global_scores[s] = score
+
+        self.multicriteria_scores = {
+            'normalized_criteria': normalized_criteria,
+            'global_scores': global_scores,
+            'criteria_values': criteria_values
+        }
+
+    def select_best_scenario_multicriteria(self):
+        """Sélection du meilleur scénario"""
+        if not self.multicriteria_scores:
+            return None
+
+        global_scores = self.multicriteria_scores['global_scores']
+        
+        # Identification du meilleur
+        best_scenario_id = max(global_scores, key=global_scores.get)
+        best_score = global_scores[best_scenario_id]
+
+        # Classement complet
+        sorted_scenarios = sorted(global_scores.items(), key=lambda x: x[1], reverse=True)
+        
+        # Analyse de robustesse
+        scores_values = list(global_scores.values())
+        gap_with_second = sorted_scenarios[0][1] - sorted_scenarios[1][1] if len(sorted_scenarios) > 1 else 0
+        robustness = "ÉLEVÉE" if gap_with_second > 0.1 else "MODÉRÉE" if gap_with_second > 0.05 else "FAIBLE"
+
+        self.best_scenario_selection = {
+            'best_scenario_id': best_scenario_id,
+            'best_score': best_score,
+            'ranking': sorted_scenarios,
+            'robustness': robustness,
+            'gap_with_second': gap_with_second
+        }
+
+        return {
+            'best_scenario': best_scenario_id + 1,
+            'score': best_score,
+            'kpis': self.scenario_analysis[best_scenario_id]['kpis']
+        }
 
 class IntegratedPredictionPlanningSystem:
     def __init__(self):
@@ -773,7 +909,7 @@ class IntegratedPredictionPlanningSystem:
         if predicted_rework_rate is None:
             raise ValueError("Aucun taux de rework prédit disponible!")
 
-        self.planner = StochasticPlanningModelEnhanced()
+        self.planner = StochasticPlanningModelComplete()
         
         # Si des demandes personnalisées sont fournies, les utiliser
         if demandes_personnalisees is not None:
@@ -804,11 +940,15 @@ class IntegratedPredictionPlanningSystem:
             return None
 
         self.planner.analyze_scenarios_detailed()
+        self.planner.calculate_multicriteria_scores()
+        self.planner.select_best_scenario_multicriteria()
         
         self.integration_results = {
             'predicted_rework_rate': self.predicted_rework_rate,
             'planning_results': self.planner.results,
-            'scenario_analysis': self.planner.scenario_analysis
+            'scenario_analysis': self.planner.scenario_analysis,
+            'multicriteria_scores': self.planner.multicriteria_scores,
+            'best_scenario_selection': self.planner.best_scenario_selection
         }
 
         return self.integration_results
@@ -843,8 +983,8 @@ def create_header():
         # Titre central
         st.markdown("""
         <div class="main-header">
-            <h1>🏭 Système Intégré Prédiction-Planification</h1>
-            <p>Prédiction de défauts et planification stochastique optimisée</p>
+            <h1>🏭 Système Intégré Prédiction-Planification Avancé</h1>
+            <p>Prédiction de défauts et planification stochastique multicritères</p>
         </div>
         """, unsafe_allow_html=True)
     
@@ -888,7 +1028,7 @@ def create_header():
             <span style='color: #2e86ab; font-weight: bold; font-size: 16px;'>ENSAM 🎓</span>
         </div>
         <div style='color: #666; margin-top: 8px; font-size: 14px; font-style: italic;'>
-            Partenariat Industriel-Académique | Innovation & Excellence
+            Partenariat Industriel-Académique | Innovation & Excellence | Planification Stochastique Avancée
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -1123,7 +1263,7 @@ def new_prediction_section(system):
     return None
 
 def planning_section(system, prediction_result):
-    st.header("📋 Planification Stochastique")
+    st.header("📋 Planification Stochastique Avancée")
     
     if prediction_result is None:
         st.warning("⚠️ Veuillez d'abord faire une prédiction")
@@ -1134,16 +1274,43 @@ def planning_section(system, prediction_result):
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        S = st.number_input("Nombre de scénarios", min_value=1, max_value=10, value=3)
+        S = st.number_input("Nombre de scénarios", min_value=1, max_value=10, value=5)
         T = st.number_input("Nombre de shifts", min_value=1, max_value=5, value=3)
     
     with col2:
-        capacity = st.number_input("Capacité par shift", min_value=50, max_value=1000, value=200)
+        capacity = st.number_input("Capacité par shift", min_value=50, max_value=1000, value=160)
         alpha_rework = st.slider("Taux de récupération rework", 0.0, 1.0, 0.8, 0.1)
     
     with col3:
         beta = st.slider("Facteur capacité rework", 1.0, 2.0, 1.2, 0.1)
         penalite = st.number_input("Pénalité pénurie", min_value=100, max_value=10000, value=1000)
+    
+    # Configuration des poids multicritères
+    st.subheader("⚖️ Poids Multicritères")
+    
+    col1, col2, col3, col4, col5 = st.columns(5)
+    
+    with col1:
+        poids_cout = st.slider("Poids Coût", 0.0, 1.0, 0.25, 0.05)
+    with col2:
+        poids_satisfaction = st.slider("Poids Satisfaction", 0.0, 1.0, 0.30, 0.05)
+    with col3:
+        poids_utilisation = st.slider("Poids Utilisation", 0.0, 1.0, 0.20, 0.05)
+    with col4:
+        poids_stabilite = st.slider("Poids Stabilité", 0.0, 1.0, 0.15, 0.05)
+    with col5:
+        poids_penuries = st.slider("Poids Pénuries", 0.0, 1.0, 0.10, 0.05)
+    
+    # Normalisation des poids
+    total_poids = poids_cout + poids_satisfaction + poids_utilisation + poids_stabilite + poids_penuries
+    if total_poids > 0:
+        poids_cout /= total_poids
+        poids_satisfaction /= total_poids
+        poids_utilisation /= total_poids
+        poids_stabilite /= total_poids
+        poids_penuries /= total_poids
+    
+    st.info(f"📊 Poids normalisés: Coût({poids_cout:.1%}), Satisfaction({poids_satisfaction:.1%}), Utilisation({poids_utilisation:.1%}), Stabilité({poids_stabilite:.1%}), Pénuries({poids_penuries:.1%})")
     
     # Configuration des demandes personnalisées
     st.subheader("📦 Demandes Personnalisées")
@@ -1179,8 +1346,8 @@ def planning_section(system, prediction_result):
             st.rerun()
     
     # Bouton de lancement
-    if st.button("🚀 Lancer la Planification", use_container_width=True):
-        with st.spinner("Optimisation en cours..."):
+    if st.button("🚀 Lancer la Planification Avancée", use_container_width=True):
+        with st.spinner("Optimisation stochastique en cours..."):
             # Configuration du système de planification
             success_setup = system.setup_planning_system(
                 S=S, T=T,
@@ -1188,25 +1355,27 @@ def planning_section(system, prediction_result):
                 alpha_rework=alpha_rework,
                 beta=beta,
                 penalite_penurie=penalite,
-                demandes_personnalisees=demandes_personnalisees
+                demandes_personnalisees=demandes_personnalisees,
+                poids_cout=poids_cout,
+                poids_satisfaction=poids_satisfaction,
+                poids_utilisation=poids_utilisation,
+                poids_stabilite=poids_stabilite,
+                poids_penuries=poids_penuries
             )
             
             if success_setup:
                 # Exécution de la planification
-                success_planning = system.run_integrated_planning(time_limit=300)
+                success_planning = system.run_integrated_planning(time_limit=600)
                 
                 if success_planning:
                     # Analyse des résultats
                     results = system.analyze_integrated_results()
                     
                     if results:
-                        st.success("✅ Planification réussie!")
-                        
-                        # Debug des paramètres
-                        planning_section_debug(system, prediction_result)
+                        st.success("✅ Planification stochastique réussie!")
                         
                         # Affichage immédiat des scénarios
-                        display_scenario_details(system)
+                        display_scenario_details_advanced(system)
                         
                         return results
                     else:
@@ -1218,37 +1387,9 @@ def planning_section(system, prediction_result):
     
     return None
 
-def planning_section_debug(system, prediction_result):
-    """Version debug pour vérifier les paramètres"""
-    
-    if system.planner and hasattr(system.planner, 'parameters'):
-        params = system.planner.parameters
-        
-        st.write("### 🔍 Debug - Paramètres des Scénarios")
-        
-        # Afficher les capacités par scénario
-        st.write("**Capacités par scénario:**")
-        for s in range(params['S']):
-            capacites = [params['CAPchaine'][(s, t)] for t in range(params['T'])]
-            st.write(f"Scénario {s+1}: {capacites}")
-        
-        # Afficher les paramètres alpha et beta
-        st.write("**Paramètres Alpha/Beta par scénario:**")
-        for s in range(params['S']):
-            alpha = params['alpha_scenarios'][s]
-            beta = params['beta_scenarios'][s]
-            st.write(f"Scénario {s+1}: Alpha={alpha:.2f}, Beta={beta:.2f}")
-        
-        # Afficher quelques taux de défaut
-        st.write("**Taux de défaut (premiers 3 refs) - DOIT ÊTRE IDENTIQUE:**")
-        for s in range(params['S']):
-            taux = [f"{params['taux_defaut'][(s, ref)]*100:.2f}%" 
-                   for ref in params['R'][:3]]
-            st.write(f"Scénario {s+1}: {taux}")
-
-def display_scenario_details(system):
-    """Affiche les détails de tous les scénarios avec positions et quantités"""
-    st.subheader("🎯 Détails des Scénarios de Planification")
+def display_scenario_details_advanced(system):
+    """Affiche les détails avancés de tous les scénarios avec analyse multicritères"""
+    st.subheader("🎯 Analyse Multicritères des Scénarios")
     
     if not hasattr(system.planner, 'scenario_analysis') or not system.planner.scenario_analysis:
         st.error("❌ Aucune analyse de scénario disponible")
@@ -1257,11 +1398,41 @@ def display_scenario_details(system):
     scenario_analysis = system.planner.scenario_analysis
     params = system.planner.parameters
     
-    # DEBUG: Vérifier les données avant affichage
-    st.write("🔍 **DIAGNOSTIC DES SCÉNARIOS:**")
-    for s, data in scenario_analysis.items():
-        kpis = data['kpis']
-        st.write(f"Scénario {s+1}: Satisfaction = {kpis['satisfaction_globale']:.2f}%, Coût = {kpis['cout_estime']:.0f}, Utilisation = {kpis['utilisation_capacite']:.2f}%")
+    # Affichage des scores multicritères si disponibles
+    if hasattr(system.planner, 'multicriteria_scores') and system.planner.multicriteria_scores:
+        st.subheader("🏆 Scores Multicritères")
+        
+        # Tableau comparatif
+        comparison_data = []
+        global_scores = system.planner.multicriteria_scores['global_scores']
+        
+        for s in range(len(scenario_analysis)):
+            kpis = scenario_analysis[s]['kpis']
+            comparison_data.append({
+                'Scénario': f'S{s+1}',
+                'Score Global': f"{global_scores[s]:.3f}",
+                'Coût Total': f"{kpis['cout_total']:.0f}",
+                'Satisfaction (%)': f"{kpis['satisfaction_globale']:.1f}",
+                'Utilisation (%)': f"{kpis['utilisation_capacite']:.1f}",
+                'Stabilité': f"{kpis['stabilite']:.1f}",
+                'Pénuries': f"{kpis['total_penuries']:.1f}"
+            })
+        
+        df_comparison = pd.DataFrame(comparison_data)
+        st.dataframe(df_comparison, use_container_width=True)
+        
+        # Meilleur scénario
+        if hasattr(system.planner, 'best_scenario_selection') and system.planner.best_scenario_selection:
+            best_selection = system.planner.best_scenario_selection
+            best_scenario_id = best_selection['best_scenario_id']
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("🥇 Meilleur Scénario", f"S{best_scenario_id + 1}")
+            with col2:
+                st.metric("📊 Score Multicritères", f"{best_selection['best_score']:.3f}")
+            with col3:
+                st.metric("🛡️ Robustesse", best_selection['robustness'])
     
     # Tabs pour chaque scénario
     tab_names = [f"Scénario {s+1}" for s in range(len(scenario_analysis))]
@@ -1279,23 +1450,9 @@ def display_scenario_details(system):
             with col2:
                 st.metric("Utilisation Capacité", f"{kpis['utilisation_capacite']:.1f}%")
             with col3:
-                st.metric("Total Pénuries", f"{kpis['total_penuries']:.1f}")
+                st.metric("Stabilité", f"{kpis['stabilite']:.1f}")
             with col4:
-                st.metric("Coût Estimé", f"{kpis['cout_estime']:,.0f}")
-            
-            # Paramètres du scénario
-            st.write("**Paramètres du scénario:**")
-            scenario_params = scenario_data['scenario_params']
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.write(f"Alpha rework: {scenario_params['alpha_rework']:.2f}")
-            with col2:
-                st.write(f"Beta factor: {scenario_params['beta_factor']:.2f}")
-            with col3:
-                capacities = scenario_params['capacities']
-                st.write(f"Capacités: {[f'{c:.0f}' for c in capacities]}")
-            
-            st.markdown("---")
+                st.metric("Coût Total", f"{kpis['cout_total']:,.0f}")
             
             # Détails par shift
             st.write("### 📋 Plan d'Exécution par Shift")
@@ -1334,8 +1491,7 @@ def display_scenario_details(system):
                             if qty > 0:
                                 taux_defaut = params['taux_defaut'][(s, ref)]
                                 prod_utile = qty * (1 - taux_defaut)
-                                alpha_s = params['alpha_scenarios'][s]
-                                prod_recuperee = qty * taux_defaut * alpha_s
+                                prod_recuperee = qty * taux_defaut * params['alpha_rework']
                                 total_utile = prod_utile + prod_recuperee
                                 
                                 quantities_data.append({
@@ -1379,8 +1535,8 @@ def display_scenario_details(system):
             df_production = pd.DataFrame(production_summary)
             st.dataframe(df_production, hide_index=True, use_container_width=True)
 
-def dashboard_section(system, results):
-    st.header("📊 Dashboard Comparatif")
+def dashboard_section_advanced(system, results):
+    st.header("📊 Dashboard Multicritères Avancé")
     
     if results is None:
         st.warning("⚠️ Aucun résultat de planification disponible")
@@ -1390,169 +1546,112 @@ def dashboard_section(system, results):
         st.error("❌ Données d'analyse manquantes")
         return
     
-    scenario_analysis = system.planner.scenario_analysis
-    params = system.planner.parameters
-    
-    # Diagnostic des sources de différenciation
-    st.subheader("🔍 Sources de Différenciation entre Scénarios")
+    # Vérification du taux de rework intégré
+    st.subheader("🔗 Intégration Prédiction-Planification")
     
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        st.write("**Capacités totales par scénario:**")
-        for s in range(params['S']):
-            total_cap = sum([params['CAPchaine'][(s, t)] for t in range(params['T'])])
-            st.write(f"S{s+1}: {total_cap:.0f}")
+        st.metric("Taux Rework Prédit", f"{results['predicted_rework_rate']:.2f}%")
     
     with col2:
-        st.write("**Alpha rework (efficacité récupération):**")
-        for s in range(params['S']):
-            alpha = params['alpha_scenarios'][s]
-            st.write(f"S{s+1}: {alpha:.2f}")
+        # Vérifier que le taux est bien utilisé dans la planification
+        taux_utilise = system.planner.parameters['taux_defaut'][(0, system.planner.parameters['R'][0])] * 100
+        st.metric("Taux Utilisé en Planification", f"{taux_utilise:.2f}%")
     
     with col3:
-        st.write("**Beta factor (temps rework):**")
-        for s in range(params['S']):
-            beta = params['beta_scenarios'][s]
-            st.write(f"S{s+1}: {beta:.2f}")
+        match = abs(results['predicted_rework_rate'] - taux_utilise) < 0.01
+        st.metric("Intégration", "✅ Réussie" if match else "❌ Échouée")
     
-    # Vérification du taux de rework constant
-    st.write("**✅ Taux de rework (constant - vient de la prédiction):**")
-    taux_rework = params['taux_defaut'][(0, params['R'][0])] * 100
-    st.write(f"Tous les scénarios: {taux_rework:.2f}%")
-    
-    # Vue d'ensemble
-    st.subheader("🎯 Vue d'Ensemble")
-    
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric("Taux Rework Utilisé", f"{results['predicted_rework_rate']:.2f}%")
-    
-    with col2:
-        st.metric("Coût Total Optimal", f"{results['planning_results']['cout_total']:,.0f}")
-    
-    with col3:
-        st.metric("Scénarios Analysés", len(scenario_analysis))
-    
-    with col4:
-        demande_totale = sum(params['EDI'].values())
-        st.metric("Demande Totale", f"{demande_totale:,.0f}")
-    
-    # Comparaison des KPIs
-    st.subheader("📈 Comparaison des Performances")
-    
-    scenarios_data = []
-    for s, data in scenario_analysis.items():
-        kpis = data['kpis']
-        scenarios_data.append({
-            'Scénario': f'S{s+1}',
-            'Satisfaction (%)': round(kpis['satisfaction_globale'], 2),
-            'Utilisation (%)': round(kpis['utilisation_capacite'], 2),
-            'Coût': round(kpis['cout_estime'], 0),
-            'Pénuries': round(kpis['total_penuries'], 2)
-        })
-    
-    df_scenarios = pd.DataFrame(scenarios_data)
-    
-    # Vérification de la variance
-    variance_satisfaction = df_scenarios['Satisfaction (%)'].var()
-    variance_cout = df_scenarios['Coût'].var()
-    variance_utilisation = df_scenarios['Utilisation (%)'].var()
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        color = "🟢" if variance_satisfaction > 0.01 else "🔴"
-        st.write(f"{color} Variance Satisfaction: {variance_satisfaction:.4f}")
-    with col2:
-        color = "🟢" if variance_cout > 0.01 else "🔴"
-        st.write(f"{color} Variance Coût: {variance_cout:.4f}")
-    with col3:
-        color = "🟢" if variance_utilisation > 0.01 else "🔴"
-        st.write(f"{color} Variance Utilisation: {variance_utilisation:.4f}")
-    
-    # Affichage du tableau
-    st.dataframe(df_scenarios, use_container_width=True)
-    
-    # Graphiques
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        fig = px.bar(df_scenarios, x='Scénario', y='Satisfaction (%)', 
-                     title="Satisfaction par Scénario", text='Satisfaction (%)')
-        fig.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
-        st.plotly_chart(fig, use_container_width=True)
-    
-    with col2:
-        fig = px.bar(df_scenarios, x='Scénario', y='Coût', 
-                     title="Coût par Scénario", text='Coût')
-        fig.update_traces(texttemplate='%{text:.0f}', textposition='outside')
-        st.plotly_chart(fig, use_container_width=True)
-    
-    # Graphique d'utilisation de capacité
-    fig = px.bar(df_scenarios, x='Scénario', y='Utilisation (%)', 
-                 title="Utilisation de la Capacité par Scénario", text='Utilisation (%)')
-    fig.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Analyse du meilleur scénario
-    st.subheader("🏆 Analyse du Meilleur Scénario")
-    
-    # Calcul du score global
-    scores_globaux = {}
-    demande_totale = sum(params['EDI'].values())
-    
-    for i, row in df_scenarios.iterrows():
-        satisfaction_norm = row['Satisfaction (%)'] / 100
-        utilisation_norm = row['Utilisation (%)'] / 100
-        penuries_norm = 1 - (row['Pénuries'] / demande_totale) if demande_totale > 0 else 1
-        cout_norm = 1 - (row['Coût'] / df_scenarios['Coût'].max()) if df_scenarios['Coût'].max() > 0 else 0
+    # Analyse multicritères
+    if 'multicriteria_scores' in results and results['multicriteria_scores']:
+        st.subheader("🏆 Analyse Multicritères")
         
-        score_global = (
-            0.30 * satisfaction_norm +
-            0.25 * utilisation_norm +
-            0.25 * penuries_norm +
-            0.20 * cout_norm
-        )
+        scores = results['multicriteria_scores']
+        scenario_analysis = results['scenario_analysis']
         
-        scores_globaux[row['Scénario']] = score_global
-    
-    best_scenario_name = max(scores_globaux, key=scores_globaux.get)
-    best_score = scores_globaux[best_scenario_name]
-    best_scenario_id = int(best_scenario_name.replace('S', '')) - 1
-    
-    col1, col2 = st.columns([1, 2])
-    
-    with col1:
-        st.metric("Meilleur Scénario", best_scenario_name, f"Score: {best_score:.3f}")
+        # Graphique radar des critères
+        col1, col2 = st.columns(2)
         
-        best_data = scenario_analysis[best_scenario_id]
-        best_kpis = best_data['kpis']
-        
-        st.write("**Performances:**")
-        st.write(f"• Satisfaction: {best_kpis['satisfaction_globale']:.1f}%")
-        st.write(f"• Utilisation: {best_kpis['utilisation_capacite']:.1f}%")
-        st.write(f"• Pénuries: {best_kpis['total_penuries']:.1f}")
-        st.write(f"• Coût: {best_kpis['cout_estime']:,.0f}")
-    
-    with col2:
-        st.write("**Plan d'Exécution Recommandé:**")
-        
-        for t in range(system.planner.parameters['T']):
-            shift_key = t + 1
-            if shift_key in best_data['shifts_details']:
-                shift_info = best_data['shifts_details'][shift_key]
-                ordre = ' → '.join([ref for ref in shift_info['execution_order'] if ref != 'VIDE'])
+        with col1:
+            # Tableau des scores
+            comparison_data = []
+            for s in range(len(scenario_analysis)):
+                kpis = scenario_analysis[s]['kpis']
+                global_score = scores['global_scores'][s]
                 
-                st.write(f"**Shift {t+1}:** {ordre}")
-                
-                if shift_info['quantities']:
-                    for ref, qty in shift_info['quantities'].items():
-                        if qty > 0:
-                            st.write(f"  • {ref}: {int(qty)} unités")
+                comparison_data.append({
+                    'Scénario': f'S{s+1}',
+                    'Score Global': f"{global_score:.3f}",
+                    'Satisfaction': f"{kpis['satisfaction_globale']:.1f}%",
+                    'Utilisation': f"{kpis['utilisation_capacite']:.1f}%",
+                    'Coût': f"{kpis['cout_total']:,.0f}",
+                    'Stabilité': f"{kpis['stabilite']:.1f}",
+                    'Pénuries': f"{kpis['total_penuries']:.1f}"
+                })
+            
+            df_scores = pd.DataFrame(comparison_data)
+            st.dataframe(df_scores, use_container_width=True)
+        
+        with col2:
+            # Graphique des scores globaux
+            scenarios = [f'S{s+1}' for s in range(len(scenario_analysis))]
+            global_scores_values = list(scores['global_scores'].values())
+            
+            fig = px.bar(
+                x=scenarios, 
+                y=global_scores_values,
+                title="Scores Multicritères par Scénario",
+                labels={'x': 'Scénarios', 'y': 'Score Global'}
+            )
+            
+            # Colorer le meilleur en or
+            colors = ['gold' if score == max(global_scores_values) else 'lightblue' 
+                     for score in global_scores_values]
+            fig.update_traces(marker_color=colors)
+            
+            st.plotly_chart(fig, use_container_width=True)
+        
+        # Meilleur scénario recommandé
+        if 'best_scenario_selection' in results and results['best_scenario_selection']:
+            best_selection = results['best_scenario_selection']
+            
+            st.subheader("🥇 Scénario Recommandé")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Meilleur Scénario", f"S{best_selection['best_scenario_id'] + 1}")
+            
+            with col2:
+                st.metric("Score Multicritères", f"{best_selection['best_score']:.3f}")
+            
+            with col3:
+                st.metric("Écart avec 2ème", f"{best_selection['gap_with_second']:.3f}")
+            
+            with col4:
+                st.metric("Robustesse", best_selection['robustness'])
+            
+            # Plan d'exécution recommandé
+            best_id = best_selection['best_scenario_id']
+            best_scenario_data = scenario_analysis[best_id]
+            
+            st.write("### 📋 Plan d'Exécution Recommandé")
+            
+            for t in range(system.planner.parameters['T']):
+                shift_key = t + 1
+                if shift_key in best_scenario_data['shifts_details']:
+                    shift_info = best_scenario_data['shifts_details'][shift_key]
+                    ordre = ' → '.join([ref for ref in shift_info['execution_order'] if ref != 'VIDE'])
+                    
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        st.write(f"**Shift {t+1}:** {ordre}")
+                    with col2:
+                        st.write(f"Util: {shift_info['capacity_utilization']:.1f}%")
 
-def export_section(system, results):
-    st.header("📁 Export des Résultats")
+def export_section_advanced(system, results):
+    st.header("📁 Export des Résultats Avancés")
     
     if results is None:
         st.warning("⚠️ Aucun résultat à exporter")
@@ -1561,57 +1660,109 @@ def export_section(system, results):
     col1, col2 = st.columns(2)
     
     with col1:
-        if st.button("📊 Exporter vers Excel", use_container_width=True):
+        if st.button("📊 Exporter vers Excel Complet", use_container_width=True):
             try:
                 # Créer un buffer en mémoire
                 output = io.BytesIO()
                 
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    # Résumé intégré
+                    # 1. Résumé intégré avec prédiction
                     summary_data = [{
                         'Taux_Rework_Predit_Pct': results['predicted_rework_rate'],
                         'Cout_Total_Optimal': results['planning_results']['cout_total'],
+                        'Nombre_Scenarios': len(results['scenario_analysis']),
                         'Timestamp': pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')
                     }]
                     
                     df_summary = pd.DataFrame(summary_data)
                     df_summary.to_excel(writer, sheet_name='Resume_Integration', index=False)
                     
-                    # Comparaison des scénarios
-                    if hasattr(system.planner, 'scenario_analysis'):
-                        planning_comparison = []
-                        for s, data in system.planner.scenario_analysis.items():
-                            kpis = data['kpis']
-                            planning_comparison.append({
+                    # 2. Scores multicritères si disponibles
+                    if 'multicriteria_scores' in results:
+                        scores_data = []
+                        for s in range(len(results['scenario_analysis'])):
+                            scores_data.append({
                                 'Scenario': f'S{s+1}',
-                                'Satisfaction_Pct': kpis['satisfaction_globale'],
-                                'Utilisation_Capacite_Pct': kpis['utilisation_capacite'],
-                                'Total_Penuries': kpis['total_penuries'],
-                                'Cout_Estime': kpis['cout_estime'],
-                                'Efficacite_Production': kpis['efficacite_production']
+                                'Score_Global': results['multicriteria_scores']['global_scores'][s],
+                                'Score_Cout_Norm': results['multicriteria_scores']['normalized_criteria']['cout'][s],
+                                'Score_Satisfaction_Norm': results['multicriteria_scores']['normalized_criteria']['satisfaction'][s],
+                                'Score_Utilisation_Norm': results['multicriteria_scores']['normalized_criteria']['utilisation'][s],
+                                'Score_Stabilite_Norm': results['multicriteria_scores']['normalized_criteria']['stabilite'][s],
+                                'Score_Penuries_Norm': results['multicriteria_scores']['normalized_criteria']['penuries'][s]
                             })
                         
-                        df_planning = pd.DataFrame(planning_comparison)
-                        df_planning.to_excel(writer, sheet_name='Comparaison_Scenarios', index=False)
+                        df_scores = pd.DataFrame(scores_data)
+                        df_scores.to_excel(writer, sheet_name='Scores_Multicriteres', index=False)
+                    
+                    # 3. Comparaison des scénarios détaillée
+                    planning_comparison = []
+                    for s, data in results['scenario_analysis'].items():
+                        kpis = data['kpis']
+                        planning_comparison.append({
+                            'Scenario': f'S{s+1}',
+                            'Satisfaction_Pct': kpis['satisfaction_globale'],
+                            'Utilisation_Capacite_Pct': kpis['utilisation_capacite'],
+                            'Stabilite': kpis['stabilite'],
+                            'Total_Penuries': kpis['total_penuries'],
+                            'Cout_Total': kpis['cout_total'],
+                            'Cout_Production': kpis['cout_production'],
+                            'Cout_Penuries': kpis['cout_penuries'],
+                            'Efficacite_Production': kpis['efficacite_production']
+                        })
+                    
+                    df_planning = pd.DataFrame(planning_comparison)
+                    df_planning.to_excel(writer, sheet_name='Comparaison_Scenarios', index=False)
+                    
+                    # 4. Production détaillée par scénario
+                    if hasattr(system.planner, 'results'):
+                        prod_data = []
+                        for s in range(len(results['scenario_analysis'])):
+                            for ref in system.planner.parameters['R']:
+                                for t in range(system.planner.parameters['T']):
+                                    qty = system.planner.results['production'][(s, ref, t)]
+                                    if qty > 0:
+                                        prod_data.append({
+                                            'Scenario': f'S{s+1}',
+                                            'Reference': ref,
+                                            'Shift': f'T{t+1}',
+                                            'Quantite': qty,
+                                            'Taux_Rework_Utilise': system.planner.parameters['taux_defaut'][(s, ref)] * 100
+                                        })
+                        
+                        if prod_data:
+                            df_prod = pd.DataFrame(prod_data)
+                            df_prod.to_excel(writer, sheet_name='Production_Details', index=False)
+                    
+                    # 5. Meilleur scénario si disponible
+                    if 'best_scenario_selection' in results:
+                        best_data = [{
+                            'Meilleur_Scenario': f"S{results['best_scenario_selection']['best_scenario_id'] + 1}",
+                            'Score_Multicriteres': results['best_scenario_selection']['best_score'],
+                            'Robustesse': results['best_scenario_selection']['robustness'],
+                            'Ecart_2eme': results['best_scenario_selection']['gap_with_second']
+                        }]
+                        
+                        df_best = pd.DataFrame(best_data)
+                        df_best.to_excel(writer, sheet_name='Meilleur_Scenario', index=False)
                 
                 # Préparer le téléchargement
                 processed_data = output.getvalue()
                 
                 st.download_button(
-                    label="⬇️ Télécharger Excel",
+                    label="⬇️ Télécharger Excel Complet",
                     data=processed_data,
-                    file_name=f"resultats_integres_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    file_name=f"resultats_integres_avances_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
                 
-                st.success("✅ Fichier Excel généré!")
+                st.success("✅ Fichier Excel avancé généré!")
                 
             except Exception as e:
                 st.error(f"❌ Erreur lors de l'export: {e}")
     
     with col2:
-        if st.button("📊 Exporter Rapport PDF", use_container_width=True):
-            st.info("🚧 Fonctionnalité en développement")
+        if st.button("📊 Export Visualisations", use_container_width=True):
+            st.info("🚧 Export des graphiques en développement")
 
 # Application principale
 def main():
@@ -1643,9 +1794,9 @@ def main():
                 "📊 1. Chargement des Données",
                 "🔮 2. Prédiction de Défauts",
                 "🎯 3. Nouvelle Prédiction",
-                "📋 4. Planification",
-                "📈 5. Dashboard",
-                "📁 6. Export"
+                "📋 4. Planification Avancée",
+                "📈 5. Dashboard Multicritères",
+                "📁 6. Export Avancé"
             ]
         )
         
@@ -1687,13 +1838,19 @@ def main():
         st.markdown("---")
         st.header("ℹ️ Informations")
         st.markdown("""
-        **Système Intégré v1.0**
+        **Système Intégré Avancé v2.0**
         
         🔮 **Prédiction:** Modèles ML pour prédire les défauts
         
-        📋 **Planification:** Optimisation stochastique avec contraintes
+        📋 **Planification:** Optimisation stochastique multicritères
         
-        📊 **Dashboard:** Comparaison multi-critères des scénarios
+        📊 **Dashboard:** Analyse multicritères avancée
+        
+        ⚖️ **Nouveautés:**
+        - Poids multicritères configurables
+        - Analyse de robustesse
+        - Score global pondéré
+        - Export complet
         """)
     
     # Contenu principal selon l'étape sélectionnée
@@ -1724,7 +1881,7 @@ def main():
         else:
             st.warning("⚠️ Veuillez d'abord entraîner les modèles à l'étape 2")
     
-    elif step == "📋 4. Planification":
+    elif step == "📋 4. Planification Avancée":
         if st.session_state.prediction_result is not None:
             planning_results = planning_section(st.session_state.system, st.session_state.prediction_result)
             if planning_results is not None:
@@ -1732,15 +1889,15 @@ def main():
         else:
             st.warning("⚠️ Veuillez d'abord effectuer une prédiction à l'étape 3")
     
-    elif step == "📈 5. Dashboard":
+    elif step == "📈 5. Dashboard Multicritères":
         if st.session_state.planning_results is not None:
-            dashboard_section(st.session_state.system, st.session_state.planning_results)
+            dashboard_section_advanced(st.session_state.system, st.session_state.planning_results)
         else:
             st.warning("⚠️ Veuillez d'abord effectuer la planification à l'étape 4")
     
-    elif step == "📁 6. Export":
+    elif step == "📁 6. Export Avancé":
         if st.session_state.planning_results is not None:
-            export_section(st.session_state.system, st.session_state.planning_results)
+            export_section_advanced(st.session_state.system, st.session_state.planning_results)
         else:
             st.warning("⚠️ Aucun résultat à exporter")
     
@@ -1760,8 +1917,9 @@ def main():
             </div>
         </div>
         <div style='color: #666; margin-top: 8px; font-size: 14px; font-style: italic;'>
-            🏭 Système Intégré Prédiction-Planification | 
+            🏭 Système Intégré Avancé Prédiction-Planification Stochastique | 
             Développé avec ❤️ en Streamlit | 
+            Modèle Multicritères v2.0 | 
             © 2024
         </div>
     </div>
