@@ -19,6 +19,7 @@ import joblib
 import pulp as plp
 from itertools import product
 from typing import Dict, List, Tuple, Any
+
 from math import pi
 import warnings
 warnings.filterwarnings('ignore')
@@ -67,6 +68,8 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+
+# Pas de fonction de standardisation - on garde les noms originaux
 
 class MultiPosteDefectPredictor:
     def __init__(self):
@@ -132,43 +135,95 @@ class MultiPosteDefectPredictor:
         return weighted_sum / total_weight if total_weight > 0 else 0
 
     def identify_postes(self, data):
-        postes_cols = [col for col in data.columns if "_defauts" in col.lower() or "defaut" in col.lower()]
-
+        """Identifie les postes en CONSERVANT STRICTEMENT les noms de colonnes originaux"""
+        postes_cols = []
+        
+        # D'abord, chercher les colonnes avec des mots-clés spécifiques
+        defaut_keywords = ['defauts', 'defaut', 'defect', 'rework', 'echec', 'fail']
+        
+        for col in data.columns:
+            if any(keyword in col.lower() for keyword in defaut_keywords):
+                postes_cols.append(col)  # AJOUTER LE NOM EXACT DE LA COLONNE
+        
+        # Si aucune colonne trouvée avec les mots-clés, utiliser l'approche par exclusion
         if not postes_cols:
-            excluded_keywords = ['jour', 'volume', 'production', 'date', 'time']
-            postes_cols = []
-
+            excluded_keywords = ['jour', 'volume', 'production', 'date', 'time', 'day', 'week']
             for col in data.columns:
                 is_excluded = any(keyword in col.lower() for keyword in excluded_keywords)
-                if not is_excluded:
-                    postes_cols.append(col)
-
-        self.postes = postes_cols
+                if not is_excluded and pd.api.types.is_numeric_dtype(data[col]):
+                    postes_cols.append(col)  # AJOUTER LE NOM EXACT DE LA COLONNE
+        
+        if not postes_cols:
+            raise ValueError("Aucune colonne de défauts identifiée! Vérifiez que vos données contiennent des colonnes numériques représentant les défauts par poste.")
+        
+        self.postes = postes_cols  # CONSERVER LES NOMS EXACTS
+        st.info(f"📍 Postes identifiés (noms conservés): {postes_cols}")
         return postes_cols
 
     def prepare_data_for_poste(self, data, poste_col):
+        """Version qui garde STRICTEMENT les noms de colonnes originaux"""
         data_copy = data.copy()
 
-        jour_col = next((col for col in data.columns if 'jour' in col.lower()), None)
-        volume_col = next((col for col in data.columns if 'volume' in col.lower()), None)
+        # Identification flexible des colonnes jour et volume SANS LES RENOMMER
+        jour_col = None
+        volume_col = None
+        
+        # Chercher la colonne jour
+        jour_keywords = ['jour', 'day', 'date', 'semaine', 'week']
+        for col in data.columns:
+            if any(keyword in col.lower() for keyword in jour_keywords):
+                jour_col = col
+                break
+        
+        # Chercher la colonne volume
+        volume_keywords = ['volume', 'production', 'quantite', 'qty']
+        for col in data.columns:
+            if any(keyword in col.lower() for keyword in volume_keywords):
+                volume_col = col
+                break
 
         if not jour_col or not volume_col:
-            raise ValueError("Les colonnes 'jour' et 'volume de production' sont requises")
+            available_cols = list(data.columns)
+            raise ValueError(f"Colonnes 'jour' et 'volume' requises! Colonnes disponibles: {available_cols}")
 
+        # GARDER LES NOMS ORIGINAUX
         self.jour_col = jour_col
         self.volume_col = volume_col
 
+        # Conversion du jour en numérique SI NÉCESSAIRE mais DANS LA MÊME COLONNE
         try:
-            data_copy['jour_numerique'] = pd.to_datetime(data_copy[jour_col])
-            data_copy['jour_numerique'] = data_copy['jour_numerique'].dt.dayofweek + 1
-            jour_col_final = 'jour_numerique'
-        except:
-            jour_col_final = jour_col
+            # Si c'est une colonne datetime ou texte, la convertir en place
+            if data_copy[jour_col].dtype == 'object':
+                try:
+                    # Essayer de convertir en datetime puis extraire le jour de la semaine
+                    data_copy[jour_col] = pd.to_datetime(data_copy[jour_col]).dt.dayofweek + 1
+                except:
+                    # Si échec, essayer conversion directe en numérique
+                    try:
+                        data_copy[jour_col] = pd.to_numeric(data_copy[jour_col], errors='coerce')
+                    except:
+                        # Si ça échoue aussi, garder tel quel
+                        pass
+        except Exception as e:
+            st.warning(f"Attention: Problème avec la colonne jour ({jour_col}): {e}")
 
-        X = data_copy[[volume_col, jour_col_final]]
-        y = data_copy[poste_col]
+        # Vérifier que la colonne de poste existe
+        if poste_col not in data_copy.columns:
+            raise ValueError(f"Colonne de poste '{poste_col}' non trouvée dans les données!")
 
-        return X, y, jour_col_final, volume_col
+        # Utiliser DIRECTEMENT les colonnes originales
+        X = data_copy[[volume_col, jour_col]].copy()
+        y = data_copy[poste_col].copy()
+        
+        # Nettoyer les données
+        mask = (~X.isnull().any(axis=1)) & (~y.isnull())
+        X = X[mask]
+        y = y[mask]
+        
+        if len(X) == 0:
+            raise ValueError("Aucune donnée valide après nettoyage!")
+
+        return X, y, jour_col, volume_col
 
     def train_model_for_poste(self, X, y, poste_name, jour_col, volume_col, search_method='grid', n_iter=20):
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
@@ -226,6 +281,7 @@ class MultiPosteDefectPredictor:
         best_model_name = None
         best_model = None
         best_params = None
+        all_results = {}
 
         for name, model in models.items():
             if search_method == 'grid':
@@ -248,7 +304,18 @@ class MultiPosteDefectPredictor:
                 )
 
             search.fit(X_train, y_train)
-            mse = mean_squared_error(y_test, search.predict(X_test))
+            y_pred_test = search.predict(X_test)
+            mse = mean_squared_error(y_test, y_pred_test)
+            mae = mean_absolute_error(y_test, y_pred_test)
+            r2 = r2_score(y_test, y_pred_test)
+            
+            all_results[name] = {
+                'mse': mse,
+                'mae': mae,
+                'r2': r2,
+                'best_params': search.best_params_,
+                'cv_score': search.best_score_
+            }
 
             if mse < best_score:
                 best_score = mse
@@ -279,7 +346,8 @@ class MultiPosteDefectPredictor:
             'y_test': y_test,
             'y_pred': y_pred,
             'X_test': X_test,
-            'best_params': best_params
+            'best_params': best_params,
+            'all_results': all_results  # Ajouter tous les résultats
         }
 
     def train_all_postes(self, data, search_method='grid'):
@@ -300,18 +368,12 @@ class MultiPosteDefectPredictor:
         if not self.models:
             raise ValueError("Les modèles doivent être entraînés avant de faire des prédictions!")
 
-        if 'jour_numerique' in self.transformers[list(self.transformers.keys())[0]].transformers_[0][2]:
-            new_data = pd.DataFrame({
-                self.volume_col: [volume],
-                'jour_numerique': [jour]
-            })
-            X_new = new_data[[self.volume_col, 'jour_numerique']]
-        else:
-            new_data = pd.DataFrame({
-                self.volume_col: [volume],
-                self.jour_col: [jour]
-            })
-            X_new = new_data[[self.volume_col, self.jour_col]]
+        # Utiliser TOUJOURS les noms de colonnes originaux
+        new_data = pd.DataFrame({
+            self.volume_col: [volume],
+            self.jour_col: [jour]
+        })
+        X_new = new_data[[self.volume_col, self.jour_col]]
 
         predictions_postes = {}
         for poste, model in self.models.items():
@@ -343,6 +405,8 @@ class MultiPosteDefectPredictor:
         self.predictions_history.append(prediction_record)
 
         return prediction_record
+
+# Le reste du code reste identique, juste les parties modifiées pour l'interface
 
 class StochasticPlanningModelComplete:
     """
@@ -384,11 +448,11 @@ class StochasticPlanningModelComplete:
                       poids_utilisation: float = 0.20,
                       poids_stabilite: float = 0.15,
                       poids_penuries: float = 0.10,
-                      # Nouveaux paramètres pour l'intégration
+                      # Paramètres pour l'intégration prédiction
                       use_predicted_rework: bool = False,
                       predicted_rework_rate: float = None):
         """
-        Configuration complète du modèle avec intégration des prédictions
+        Configuration complète du modèle avec paramètres stochastiques configurables
         """
 
         # 10 références par défaut
@@ -443,34 +507,35 @@ class StochasticPlanningModelComplete:
 
         D_array = np.array(D)
 
-        # Génération stochastique des paramètres
+        # GÉNÉRATION STOCHASTIQUE CONFIGURABLE DES PARAMÈTRES
         np.random.seed(42)
         
-        # Taux de défaut - MODIFICATION POUR INTÉGRATION
-        taux_defaut = {}
-        
-        if use_predicted_rework and predicted_rework_rate is not None:
-            # Utiliser le taux prédit pour TOUS les scénarios (constant)
-            base_rate = predicted_rework_rate / 100  # Conversion de pourcentage
-            self.predicted_rework_rate = predicted_rework_rate
-            
-            for s in range(S):
-                for i in R:
-                    # Même taux pour tous les scénarios (vient de la prédiction)
-                    taux_defaut[(s, i)] = base_rate
-        else:
-            # Génération stochastique classique
-            for s in range(S):
-                for i in R:
-                    defaut = max(0.001, min(0.25, np.random.normal(mean_defaut, std_defaut)))
-                    taux_defaut[(s, i)] = defaut
-
-        # Capacités stochastiques selon spécifications
+        # Capacités stochastiques avec paramètres configurables
         CAPchaine = {}
         for s in range(S):
             for t in range(T):
                 capacite = max(50, np.random.normal(mean_capacity, std_capacity))
                 CAPchaine[(s, t)] = capacite
+        
+        # Taux de défaut stochastiques configurables
+        taux_defaut = {}
+        
+        if use_predicted_rework and predicted_rework_rate is not None:
+            # Utiliser le taux prédit avec variation configurable
+            base_rate = predicted_rework_rate / 100  # Conversion de pourcentage
+            self.predicted_rework_rate = predicted_rework_rate
+            
+            for s in range(S):
+                for i in R:
+                    # Variation autour du taux prédit selon std_defaut
+                    defaut = max(0.001, min(0.25, np.random.normal(base_rate, std_defaut)))
+                    taux_defaut[(s, i)] = defaut
+        else:
+            # Génération stochastique selon les paramètres configurés
+            for s in range(S):
+                for i in R:
+                    defaut = max(0.001, min(0.25, np.random.normal(mean_defaut, std_defaut)))
+                    taux_defaut[(s, i)] = defaut
 
         self.parameters = {
             'S': S, 'T': T, 'R': R, 'EDI': EDI_dict, 'p': p_dict, 'D': D_array,
@@ -884,7 +949,9 @@ class IntegratedPredictionPlanningSystem:
         self.predictor = MultiPosteDefectPredictor()
         self.predictor.original_data = data.copy()
         results, postes = self.predictor.train_all_postes(data, search_method='grid')
-        return True
+        # Stocker les résultats pour pouvoir les utiliser plus tard
+        self.prediction_training_results = results
+        return results, postes
 
     def make_prediction_for_planning(self, jour, volume, method='moyenne_ponderee'):
         if self.predictor is None:
@@ -913,11 +980,11 @@ class IntegratedPredictionPlanningSystem:
         if demandes_personnalisees is not None:
             params['EDI'] = demandes_personnalisees
 
-        self.planner.set_parameters(
-            use_predicted_rework=True,
-            predicted_rework_rate=predicted_rework_rate,
-            **params
-        )
+        # Utiliser le taux prédit par défaut si activé
+        if params.get('use_predicted_rework', True):
+            params['predicted_rework_rate'] = predicted_rework_rate
+
+        self.planner.set_parameters(**params)
         return True
 
     def run_integrated_planning(self, time_limit=300):
@@ -1032,6 +1099,7 @@ def create_header():
     """, unsafe_allow_html=True)
 
 def load_data_section():
+    """FONCTION MODIFIÉE - Même traitement pour Excel et démo"""
     st.header("📊 Chargement des Données")
     
     col1, col2 = st.columns([2, 1])
@@ -1059,51 +1127,140 @@ def load_data_section():
             data = pd.read_excel(uploaded_file)
             st.success(f"✅ Données chargées: {len(data)} lignes, {len(data.columns)} colonnes")
             
-            with st.expander("👀 Aperçu des données"):
+            with st.expander("👀 Aperçu des données brutes"):
                 st.dataframe(data.head())
                 st.write("**Colonnes disponibles:**", list(data.columns))
             
+            # MÊME TRAITEMENT QUE LES DONNÉES DE DÉMO
+            # Appeler la même fonction d'affichage que pour les données de démo
+            display_demo_data(data)
+            
             return data
+            
         except Exception as e:
             st.error(f"❌ Erreur lors du chargement: {e}")
             return None
     
     return None
 
-def display_demo_data(demo_data):
-    """Affiche les données de démonstration avec des statistiques et visualisations"""
-    st.subheader("📊 Données de Démonstration Générées")
+def display_demo_data(data):
+    """Affiche les données avec des statistiques et visualisations - GARDE TOUS LES NOMS ORIGINAUX"""
+    
+    # Déterminer automatiquement si ce sont des données de démo ou Excel
+    is_demo = set(['Jour', 'Volume_production', 'Poste1_defauts', 'Poste2_defauts', 'Poste3_defauts']).issubset(set(data.columns))
+    
+    if is_demo:
+        st.subheader("📊 Données de Démonstration Générées")
+    else:
+        st.subheader("📊 Analyse des Données Téléchargées")
+    
+    # Identification automatique des colonnes SANS LES RENOMMER - NOMS EXACTS CONSERVÉS
+    jour_col = None
+    volume_col = None
+    defaut_cols = []
+    
+    # Trouver la colonne jour - GARDER LE NOM EXACT
+    jour_keywords = ['jour', 'day', 'date', 'semaine', 'week']
+    for col in data.columns:
+        if any(keyword in col.lower() for keyword in jour_keywords):
+            jour_col = col  # GARDER LE NOM EXACT DE LA COLONNE
+            break
+    
+    # Trouver la colonne volume - GARDER LE NOM EXACT
+    volume_keywords = ['volume', 'production', 'quantite', 'qty']
+    for col in data.columns:
+        if any(keyword in col.lower() for keyword in volume_keywords):
+            volume_col = col  # GARDER LE NOM EXACT DE LA COLONNE
+            break
+    
+    # Trouver les colonnes de défauts - GARDER LES NOMS EXACTS
+    defaut_keywords = ['defauts', 'defaut', 'defect', 'rework', 'echec', 'fail']
+    for col in data.columns:
+        if any(keyword in col.lower() for keyword in defaut_keywords):
+            defaut_cols.append(col)  # AJOUTER LE NOM EXACT SANS MODIFICATION
+    
+    # Si pas trouvé par mots-clés, essayer par exclusion pour les défauts - GARDER LES NOMS EXACTS
+    if not defaut_cols:
+        excluded_keywords = ['jour', 'volume', 'production', 'date', 'time', 'day', 'week']
+        for col in data.columns:
+            is_excluded = any(keyword in col.lower() for keyword in excluded_keywords)
+            if not is_excluded and pd.api.types.is_numeric_dtype(data[col]):
+                defaut_cols.append(col)  # AJOUTER LE NOM EXACT SANS MODIFICATION
     
     # Statistiques générales
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.metric("Nombre de jours", len(demo_data))
+        st.metric("Nombre de lignes", len(data))
     
     with col2:
-        volume_moyen = demo_data['Volume_production'].mean()
-        st.metric("Volume moyen", f"{volume_moyen:.0f}")
+        if volume_col:
+            volume_moyen = data[volume_col].mean()
+            # AFFICHER LE NOM EXACT DE LA COLONNE
+            st.metric(f"Volume moyen\n({volume_col})", f"{volume_moyen:.0f}")
+        else:
+            st.metric("Volume moyen", "Non trouvé", help="Aucune colonne de volume identifiée")
     
     with col3:
-        defauts_total = demo_data[['Poste1_defauts', 'Poste2_defauts', 'Poste3_defauts']].sum().sum()
-        st.metric("Total défauts", f"{defauts_total:.0f}")
+        if defaut_cols:
+            defauts_total = data[defaut_cols].sum().sum()
+            st.metric(f"Total défauts\n({len(defaut_cols)} postes)", f"{defauts_total:.0f}")
+        else:
+            st.metric("Total défauts", "Non trouvé", help="Aucune colonne de défauts identifiée")
     
     with col4:
-        taux_defaut_moyen = (defauts_total / demo_data['Volume_production'].sum()) * 100
-        st.metric("Taux défaut moyen", f"{taux_defaut_moyen:.2f}%")
+        if defaut_cols and volume_col:
+            taux_defaut_moyen = (defauts_total / data[volume_col].sum()) * 100
+            st.metric("Taux défaut moyen", f"{taux_defaut_moyen:.2f}%")
+        else:
+            st.metric("Taux défaut moyen", "Non calculable")
+    
+    # Affichage des colonnes identifiées - NOMS EXACTS CONSERVÉS
+    st.subheader("🔍 Colonnes Identifiées")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if jour_col:
+            st.success(f"✅ **Jour:** {jour_col}")  # AFFICHER LE NOM EXACT
+        else:
+            st.error("❌ **Jour:** Non trouvé")
+    
+    with col2:
+        if volume_col:
+            st.success(f"✅ **Volume:** {volume_col}")  # AFFICHER LE NOM EXACT
+        else:
+            st.error("❌ **Volume:** Non trouvé")
+    
+    with col3:
+        if defaut_cols:
+            st.success(f"✅ **Défauts:** {len(defaut_cols)} colonnes")
+            # AFFICHER LES NOMS EXACTS DES POSTES
+            st.write(f"Postes: {', '.join(defaut_cols)}")
+        else:
+            st.error("❌ **Défauts:** Non trouvé")
     
     # Aperçu des données
-    with st.expander("👀 Aperçu des Données Générées", expanded=True):
+    with st.expander("👀 Aperçu des Données", expanded=True):
         col1, col2 = st.columns([2, 1])
         
         with col1:
             st.write("**Premières lignes des données:**")
-            st.dataframe(demo_data.head(10), use_container_width=True)
+            st.dataframe(data.head(10), use_container_width=True)
         
         with col2:
             st.write("**Statistiques descriptives:**")
-            stats_df = demo_data.describe().round(2)
-            st.dataframe(stats_df)
+            # Sélectionner seulement les colonnes numériques pour les stats
+            numeric_cols = data.select_dtypes(include=[np.number]).columns
+            if len(numeric_cols) > 0:
+                stats_df = data[numeric_cols].describe().round(2)
+                st.dataframe(stats_df)
+            else:
+                st.write("Aucune colonne numérique trouvée")
+    
+    # NOUVEAU : Affichage explicite des noms de postes conservés
+    if defaut_cols:
+        st.subheader("🏷️ Noms des Postes Conservés")
+        st.info(f"📋 Les noms suivants seront utilisés tels quels dans tout le système : **{', '.join(defaut_cols)}**")
 
 def create_demo_data(n_days=100):
     """Crée des données de démonstration avec des valeurs réalistes"""
@@ -1143,6 +1300,7 @@ def create_demo_data(n_days=100):
     return pd.DataFrame(data)
 
 def prediction_section(system, data):
+    """FONCTION AMÉLIORÉE - Affichage des modèles optimaux avec NOMS DE POSTES ORIGINAUX"""
     st.header("🔮 Prédiction de Défauts")
     
     if data is None:
@@ -1150,54 +1308,125 @@ def prediction_section(system, data):
         return None
     
     # Configuration et entraînement du système de prédiction
-    with st.spinner("🧠 Entraînement des modèles de prédiction..."):
-        success = system.setup_prediction_system(data)
-    
-    if success:
-        st.success("✅ Modèles de prédiction entraînés avec succès!")
+    try:
+        with st.spinner("🧠 Entraînement des modèles de prédiction..."):
+            results, postes = system.setup_prediction_system(data)
         
-        # Afficher le taux de rework initial
-        st.subheader("📊 Taux de Rework Initial de la Chaîne")
+        if results and postes:
+            st.success("✅ Modèles de prédiction entraînés avec succès!")
+            
+            # AFFICHAGE DES MODÈLES OPTIMAUX SÉLECTIONNÉS - NOMS ORIGINAUX CONSERVÉS
+            st.subheader("🏆 Modèles Optimaux Sélectionnés")
+            
+            # Tableau des modèles sélectionnés - NOMS DE POSTES ORIGINAUX
+            model_selection_data = []
+            for poste_nom_original in postes:  # UTILISER LES NOMS ORIGINAUX
+                if poste_nom_original in results:
+                    result = results[poste_nom_original]
+                    model_selection_data.append({
+                        'Poste': poste_nom_original,  # GARDER LE NOM EXACT ORIGINAL
+                        'Modèle Optimal': result['model_name'],
+                        'MSE': f"{result['mse']:.4f}",
+                        'MAE': f"{result['mae']:.4f}",
+                        'R²': f"{result['r2']:.4f}",
+                        'Paramètres Optimaux': str(result['best_params'])
+                    })
+            
+            df_models = pd.DataFrame(model_selection_data)
+            st.dataframe(df_models, use_container_width=True)
+            
+            # Affichage détaillé des résultats de sélection - NOMS ORIGINAUX
+            with st.expander("📊 Détails de la Sélection de Modèles", expanded=False):
+                for poste_nom_original in postes:  # UTILISER LES NOMS ORIGINAUX
+                    if poste_nom_original in results and 'all_results' in results[poste_nom_original]:
+                        st.write(f"### 🔍 {poste_nom_original}")  # AFFICHER LE NOM ORIGINAL
+                        
+                        all_results = results[poste_nom_original]['all_results']
+                        comparison_data = []
+                        
+                        for model_name, model_result in all_results.items():
+                            comparison_data.append({
+                                'Modèle': model_name,
+                                'MSE': f"{model_result['mse']:.4f}",
+                                'MAE': f"{model_result['mae']:.4f}",
+                                'R²': f"{model_result['r2']:.4f}",
+                                'Score CV': f"{model_result['cv_score']:.4f}",
+                                'Meilleur': "🏆" if model_name == results[poste_nom_original]['model_name'] else ""
+                            })
+                        
+                        df_comparison = pd.DataFrame(comparison_data)
+                        st.dataframe(df_comparison, use_container_width=True)
+                        
+                        # Graphique de comparaison - TITRE AVEC NOM ORIGINAL
+                        fig = px.bar(
+                            df_comparison, 
+                            x='Modèle', 
+                            y='R²',
+                            title=f'Comparaison R² pour {poste_nom_original}',  # NOM ORIGINAL
+                            color='R²',
+                            color_continuous_scale='viridis'
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+            
+            # Afficher le taux de rework initial - UTILISER LES NOMS ORIGINAUX
+            st.subheader("📊 Taux de Rework Initial de la Chaîne")
+            
+            # Calculer le taux moyen historique avec NOMS ORIGINAUX
+            postes_originaux = system.predictor.postes  # LISTE DES NOMS ORIGINAUX
+            taux_historiques = {}
+            
+            for poste_nom_original in postes_originaux:  # BOUCLE SUR NOMS ORIGINAUX
+                if poste_nom_original in data.columns and system.predictor.volume_col in data.columns:
+                    defauts_totaux = data[poste_nom_original].sum()  # UTILISER NOM ORIGINAL
+                    volume_total = data[system.predictor.volume_col].sum()
+                    taux_historiques[poste_nom_original] = (defauts_totaux / volume_total) * 100 if volume_total > 0 else 0
+            
+            # Calculer le taux pondéré historique avec NOMS ORIGINAUX
+            taux_pondere_historique = 0
+            if system.predictor.poste_weights:
+                for poste_nom_original, poids in system.predictor.poste_weights.items():  # BOUCLE SUR NOMS ORIGINAUX
+                    if poste_nom_original in taux_historiques:
+                        taux_pondere_historique += taux_historiques[poste_nom_original] * poids
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric(
+                    "Taux Rework Historique (Moyenne Pondérée)",
+                    f"{taux_pondere_historique:.2f}%",
+                    help="Basé sur les données historiques avec pondération Q*D"
+                )
+            
+            with col2:
+                taux_moyen_simple = np.mean(list(taux_historiques.values())) if taux_historiques else 0
+                st.metric(
+                    "Taux Rework Historique (Moyenne Simple)",
+                    f"{taux_moyen_simple:.2f}%"
+                )
+            
+            with col3:
+                st.metric("Nombre de Postes", len(postes_originaux))
+            
+            # CONFIRMATION EXPLICITE DES NOMS CONSERVÉS
+            st.subheader("🏷️ Confirmation des Noms de Postes")
+            st.success(f"✅ **Noms de postes conservés:** {', '.join(postes_originaux)}")
+            
+            return True
+        else:
+            st.error("❌ Échec de l'entraînement des modèles")
+            return False
+            
+    except Exception as e:
+        st.error(f"❌ Erreur lors de l'entraînement: {e}")
+        st.write("**Détails de l'erreur:**")
+        st.code(str(e))
         
-        # Calculer le taux moyen historique
-        postes = system.predictor.postes
-        taux_historiques = {}
+        # Afficher des informations de débogage
+        st.write("**Informations de débogage:**")
+        st.write(f"- Colonnes disponibles: {list(data.columns)}")
+        st.write(f"- Nombre de lignes: {len(data)}")
+        st.write(f"- Types de colonnes: {dict(data.dtypes)}")
         
-        for poste in postes:
-            if poste in data.columns and system.predictor.volume_col in data.columns:
-                defauts_totaux = data[poste].sum()
-                volume_total = data[system.predictor.volume_col].sum()
-                taux_historiques[poste] = (defauts_totaux / volume_total) * 100 if volume_total > 0 else 0
-        
-        # Calculer le taux pondéré historique
-        taux_pondere_historique = 0
-        if system.predictor.poste_weights:
-            for poste, poids in system.predictor.poste_weights.items():
-                if poste in taux_historiques:
-                    taux_pondere_historique += taux_historiques[poste] * poids
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.metric(
-                "Taux Rework Historique (Moyenne Pondérée)",
-                f"{taux_pondere_historique:.2f}%",
-                help="Basé sur les données historiques avec pondération Q*D"
-            )
-        
-        with col2:
-            taux_moyen_simple = np.mean(list(taux_historiques.values()))
-            st.metric(
-                "Taux Rework Historique (Moyenne Simple)",
-                f"{taux_moyen_simple:.2f}%"
-            )
-        
-        with col3:
-            st.metric("Nombre de Postes", len(postes))
-        
-        return True
-    else:
-        st.error("❌ Échec de l'entraînement des modèles")
         return False
 
 def new_prediction_section(system):
@@ -1256,6 +1485,113 @@ def new_prediction_section(system):
             jour_name = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'][jour-1]
             st.metric("Jour Analysé", jour_name)
         
+        # DÉTAILS DES PRÉDICTIONS PAR POSTE - NOMS ORIGINAUX CONSERVÉS
+        st.subheader("🔍 Détails des Prédictions par Poste")
+        
+        prediction_details = []
+        for poste_nom_original, defauts_pred in pred_details['predictions_postes'].items():
+            taux_rework_poste = pred_details['taux_rework_postes'][poste_nom_original]
+            
+            # Récupérer le modèle utilisé pour ce poste - UTILISER LE NOM ORIGINAL
+            model_name = system.predictor.best_model_names.get(poste_nom_original, "Inconnu")
+            
+            # Récupérer l'importance des features si disponible - UTILISER LE NOM ORIGINAL
+            importance_info = ""
+            if poste_nom_original in system.predictor.feature_importances:
+                feat_imp = system.predictor.feature_importances[poste_nom_original]
+                importance_info = f"Volume: {feat_imp.iloc[0]['importance']:.3f}, Jour: {feat_imp.iloc[1]['importance']:.3f}"
+            
+            prediction_details.append({
+                'Poste': poste_nom_original,  # GARDER LE NOM EXACT ORIGINAL
+                'Modèle Optimal': model_name,
+                'Défauts Prédits': f"{defauts_pred:.1f}",
+                'Taux Rework': f"{taux_rework_poste:.2f}%",
+                'Importance Features': importance_info if importance_info else "N/A"
+            })
+        
+        df_predictions = pd.DataFrame(prediction_details)
+        st.dataframe(df_predictions, use_container_width=True)
+        
+        # Graphique de comparaison des prédictions par poste - NOMS ORIGINAUX
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Graphique des défauts prédits par poste - UTILISER LES NOMS ORIGINAUX
+            postes_originaux = list(pred_details['predictions_postes'].keys())
+            defauts_values = list(pred_details['predictions_postes'].values())
+            
+            fig_defauts = px.bar(
+                x=postes_originaux,  # NOMS ORIGINAUX DES POSTES
+                y=defauts_values,
+                title="Défauts Prédits par Poste",
+                labels={'x': 'Postes', 'y': 'Nombre de Défauts'},
+                color=defauts_values,
+                color_continuous_scale='reds'
+            )
+            st.plotly_chart(fig_defauts, use_container_width=True)
+        
+        with col2:
+            # Graphique des taux de rework par poste - UTILISER LES NOMS ORIGINAUX
+            taux_values = list(pred_details['taux_rework_postes'].values())
+            
+            fig_taux = px.bar(
+                x=postes_originaux,  # NOMS ORIGINAUX DES POSTES
+                y=taux_values,
+                title="Taux de Rework par Poste (%)",
+                labels={'x': 'Postes', 'y': 'Taux de Rework (%)'},
+                color=taux_values,
+                color_continuous_scale='oranges'
+            )
+            st.plotly_chart(fig_taux, use_container_width=True)
+        
+        # Comparaison des méthodes d'agrégation
+        st.subheader("⚖️ Comparaison des Méthodes d'Agrégation")
+        
+        aggregation_data = []
+        for method, taux in pred_details['taux_rework_chaine'].items():
+            defauts = pred_details['predictions_chaine'][method]
+            
+            method_names = {
+                'max': 'Maximum',
+                'moyenne': 'Moyenne Simple',
+                'moyenne_ponderee': 'Moyenne Pondérée (Recommandé)',
+                'somme': 'Somme'
+            }
+            
+            aggregation_data.append({
+                'Méthode': method_names.get(method, method),
+                'Défauts Totaux': f"{defauts:.1f}",
+                'Taux Rework Chaîne': f"{taux:.2f}%",
+                'Recommandé': "✅" if method == 'moyenne_ponderee' else ""
+            })
+        
+        df_aggregation = pd.DataFrame(aggregation_data)
+        st.dataframe(df_aggregation, use_container_width=True)
+        
+        # Affichage des poids utilisés pour la moyenne pondérée - NOMS ORIGINAUX
+        if system.predictor.poste_weights:
+            st.subheader("⚖️ Poids Utilisés pour la Moyenne Pondérée")
+            
+            weights_data = []
+            for poste_nom_original, poids in system.predictor.poste_weights.items():
+                weights_data.append({
+                    'Poste': poste_nom_original,  # GARDER LE NOM EXACT ORIGINAL
+                    'Poids': f"{poids:.4f}",
+                    'Pourcentage': f"{poids*100:.2f}%"
+                })
+            
+            df_weights = pd.DataFrame(weights_data)
+            st.dataframe(df_weights, use_container_width=True)
+            
+            # Graphique des poids - NOMS ORIGINAUX
+            fig_weights = px.pie(
+                df_weights,
+                values='Poids',
+                names='Poste',  # UTILISE LES NOMS ORIGINAUX
+                title="Distribution des Poids par Poste"
+            )
+            st.plotly_chart(fig_weights, use_container_width=True)
+        
         return prediction_result
     
     return None
@@ -1269,6 +1605,7 @@ def planning_section(system, prediction_result):
     
     st.subheader("⚙️ Configuration de la Planification")
     
+    # Paramètres de base
     col1, col2, col3 = st.columns(3)
     
     with col1:
@@ -1276,12 +1613,85 @@ def planning_section(system, prediction_result):
         T = st.number_input("Nombre de shifts", min_value=1, max_value=5, value=3)
     
     with col2:
-        capacity = st.number_input("Capacité par shift", min_value=50, max_value=1000, value=160)
+        mean_capacity = st.number_input("Capacité moyenne par shift", min_value=50, max_value=1000, value=160)
         alpha_rework = st.slider("Taux de récupération rework", 0.0, 1.0, 0.8, 0.1)
     
     with col3:
         beta = st.slider("Facteur capacité rework", 1.0, 2.0, 1.2, 0.1)
         penalite = st.number_input("Pénalité pénurie", min_value=100, max_value=10000, value=1000)
+    
+    # NOUVEAUX PARAMÈTRES STOCHASTIQUES
+    st.subheader("🎲 Paramètres Stochastiques")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.write("**📊 Variations de Capacité**")
+        std_capacity = st.slider(
+            "Écart-type capacité", 
+            min_value=5.0, 
+            max_value=50.0, 
+            value=10.0, 
+            step=1.0,
+            help="Variation stochastique de la capacité entre scénarios"
+        )
+        
+        use_predicted_rework = st.checkbox(
+            "Utiliser taux rework prédit", 
+            value=True,
+            help="Utilise le taux prédit ou génère stochastiquement"
+        )
+        
+    with col2:
+        st.write("**🔄 Variations du Taux de Rework**")
+        
+        if not use_predicted_rework:
+            mean_defaut = st.slider(
+                "Taux défaut moyen", 
+                min_value=0.01, 
+                max_value=0.20, 
+                value=0.04, 
+                step=0.01,
+                help="Taux de défaut moyen pour génération stochastique"
+            )
+            
+            std_defaut = st.slider(
+                "Écart-type défaut", 
+                min_value=0.001, 
+                max_value=0.05, 
+                value=0.01, 
+                step=0.001,
+                help="Variation stochastique du taux de défaut"
+            )
+        else:
+            # Paramètres pour variation autour du taux prédit
+            rework_variation = st.slider(
+                "Variation autour du taux prédit (%)", 
+                min_value=0.0, 
+                max_value=50.0, 
+                value=10.0, 
+                step=5.0,
+                help="Pourcentage de variation autour du taux prédit"
+            )
+            
+            mean_defaut = prediction_result['rework_rate_for_planning'] / 100
+            std_defaut = mean_defaut * (rework_variation / 100)
+    
+    # Affichage des paramètres calculés
+    with st.expander("📈 Aperçu des Distributions Stochastiques"):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.write("**Capacité:**")
+            st.write(f"- Moyenne: {mean_capacity}")
+            st.write(f"- Écart-type: {std_capacity}")
+            st.write(f"- Plage attendue: [{mean_capacity-2*std_capacity:.0f}, {mean_capacity+2*std_capacity:.0f}]")
+        
+        with col2:
+            st.write("**Taux de défaut:**")
+            st.write(f"- Moyenne: {mean_defaut*100:.2f}%")
+            st.write(f"- Écart-type: {std_defaut*100:.2f}%")
+            st.write(f"- Plage attendue: [{max(0,(mean_defaut-2*std_defaut)*100):.2f}%, {min(25,(mean_defaut+2*std_defaut)*100):.2f}%]")
     
     # Configuration des poids multicritères
     st.subheader("⚖️ Poids Multicritères")
@@ -1346,10 +1756,13 @@ def planning_section(system, prediction_result):
     # Bouton de lancement
     if st.button("🚀 Lancer la Planification Avancée", use_container_width=True):
         with st.spinner("Optimisation stochastique en cours..."):
-            # Configuration du système de planification
+            # Configuration du système de planification avec TOUS les paramètres
             success_setup = system.setup_planning_system(
                 S=S, T=T,
-                mean_capacity=capacity,
+                mean_capacity=mean_capacity,
+                std_capacity=std_capacity,  # Nouveau paramètre
+                mean_defaut=mean_defaut,    # Nouveau paramètre
+                std_defaut=std_defaut,      # Nouveau paramètre
                 alpha_rework=alpha_rework,
                 beta=beta,
                 penalite_penurie=penalite,
@@ -1358,7 +1771,9 @@ def planning_section(system, prediction_result):
                 poids_satisfaction=poids_satisfaction,
                 poids_utilisation=poids_utilisation,
                 poids_stabilite=poids_stabilite,
-                poids_penuries=poids_penuries
+                poids_penuries=poids_penuries,
+                use_predicted_rework=use_predicted_rework,  # Nouveau paramètre
+                predicted_rework_rate=prediction_result['rework_rate_for_planning'] if use_predicted_rework else None
             )
             
             if success_setup:
@@ -1371,6 +1786,32 @@ def planning_section(system, prediction_result):
                     
                     if results:
                         st.success("✅ Planification stochastique réussie!")
+                        
+                        # Affichage des paramètres utilisés
+                        st.subheader("📋 Paramètres Utilisés")
+                        col1, col2, col3 = st.columns(3)
+                        
+                        with col1:
+                            st.write("**Paramètres de base:**")
+                            st.write(f"- Scénarios: {S}")
+                            st.write(f"- Shifts: {T}")
+                            st.write(f"- Capacité moyenne: {mean_capacity}")
+                        
+                        with col2:
+                            st.write("**Paramètres stochastiques:**")
+                            st.write(f"- Écart-type capacité: {std_capacity}")
+                            if use_predicted_rework:
+                                st.write(f"- Taux rework prédit: {prediction_result['rework_rate_for_planning']:.2f}%")
+                                st.write(f"- Variation: ±{rework_variation}%")
+                            else:
+                                st.write(f"- Taux défaut moyen: {mean_defaut*100:.2f}%")
+                                st.write(f"- Écart-type défaut: {std_defaut*100:.2f}%")
+                        
+                        with col3:
+                            st.write("**Paramètres rework:**")
+                            st.write(f"- Alpha rework: {alpha_rework}")
+                            st.write(f"- Beta facteur: {beta}")
+                            st.write(f"- Pénalité: {penalite}")
                         
                         # Affichage immédiat des scénarios
                         display_scenario_details_advanced(system)
@@ -1844,11 +2285,14 @@ def main():
         
         📊 **Dashboard:** Analyse multicritères avancée
         
-        ⚖️ **Nouveautés:**
+        ⚖️ **Fonctionnalités:**
         - Poids multicritères configurables
         - Analyse de robustesse
         - Score global pondéré
         - Export complet
+        - **Conservation stricte des noms de postes originaux**
+        - **Traitement uniforme des données Excel et démo**
+        - **Identification flexible des colonnes**
         """)
     
     # Contenu principal selon l'étape sélectionnée
@@ -1917,7 +2361,7 @@ def main():
         <div style='color: #666; margin-top: 8px; font-size: 14px; font-style: italic;'>
             🏭 Système Intégré Avancé Prédiction-Planification Stochastique | 
             Développé avec ❤️ en Streamlit | 
-            Modèle Multicritères v2.0 | 
+            Modèle v2.0 - Conservation Stricte des Noms Originaux | 
             © 2024
         </div>
     </div>
