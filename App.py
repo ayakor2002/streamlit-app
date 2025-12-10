@@ -5,8 +5,6 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import io
-import sys
-import subprocess
 from sklearn.model_selection import train_test_split, GridSearchCV, TimeSeriesSplit, RandomizedSearchCV
 from sklearn.preprocessing import StandardScaler
 from sklearn.compose import ColumnTransformer
@@ -15,24 +13,20 @@ from sklearn.tree import DecisionTreeRegressor
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.neural_network import MLPRegressor
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
-import joblib
 import pulp as plp
-from itertools import product
 from typing import Dict, List, Tuple, Any
-
-from math import pi
 import warnings
 warnings.filterwarnings('ignore')
 
-# Configuration de la page Streamlit
+# Streamlit page configuration
 st.set_page_config(
-    page_title="Système Intégré Prédiction-Planification Avancé",
+    page_title="Advanced Prediction-Planning System",
     page_icon="🏭",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# CSS personnalisé
+# Custom CSS
 st.markdown("""
 <style>
     .main-header {
@@ -69,8 +63,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Pas de fonction de standardisation - on garde les noms originaux
-
 class MultiPosteDefectPredictor:
     def __init__(self):
         self.models = {}
@@ -78,253 +70,178 @@ class MultiPosteDefectPredictor:
         self.best_model_names = {}
         self.feature_importances = {}
         self.original_data = None
-        self.postes = []
-        self.jour_col = None
+        self.stations = []
+        self.day_col = None
         self.volume_col = None
         self.predictions_history = []
-        self.poste_weights = {}
+        self.station_weights = {}
 
-    def calculate_poste_weights_from_data(self, data=None):
+    def calculate_station_weights_from_data(self, data=None):
         if data is None:
             data = self.original_data
-
         if data is None:
-            self.poste_weights = {poste: 1.0/len(self.postes) for poste in self.postes}
+            self.station_weights = {station: 1.0/len(self.stations) for station in self.stations}
             return
 
-        poste_qi_di = {}
+        station_qi_di = {}
         total_qi_di = 0
 
-        for poste in self.postes:
-            if poste in data.columns and self.volume_col in data.columns:
+        for station in self.stations:
+            if station in data.columns and self.volume_col in data.columns:
                 qi = data[self.volume_col].sum()
-                di = data[poste].sum()
+                di = data[station].sum()
                 qi_di = qi * di
-                poste_qi_di[poste] = qi_di
+                station_qi_di[station] = qi_di
                 total_qi_di += qi_di
 
         if total_qi_di > 0:
-            self.poste_weights = {poste: qi_di / total_qi_di
-                                 for poste, qi_di in poste_qi_di.items()}
+            self.station_weights = {station: qi_di / total_qi_di for station, qi_di in station_qi_di.items()}
         else:
-            self.poste_weights = {poste: 1.0/len(self.postes) for poste in self.postes}
+            self.station_weights = {station: 1.0/len(self.stations) for station in self.stations}
 
-    def set_poste_weights(self, weights_dict=None):
+    def set_station_weights(self, weights_dict=None):
         if weights_dict is None:
-            self.calculate_poste_weights_from_data()
+            self.calculate_station_weights_from_data()
         else:
-            self.poste_weights = weights_dict.copy()
-            total_weight = sum(self.poste_weights.values())
+            self.station_weights = weights_dict.copy()
+            total_weight = sum(self.station_weights.values())
             if total_weight > 0:
-                self.poste_weights = {poste: weight/total_weight
-                                     for poste, weight in self.poste_weights.items()}
+                self.station_weights = {station: weight/total_weight for station, weight in self.station_weights.items()}
 
-    def calculate_weighted_average(self, predictions_postes):
-        if not self.poste_weights:
-            self.set_poste_weights()
+    def calculate_weighted_average(self, predictions_stations):
+        if not self.station_weights:
+            self.set_station_weights()
 
         weighted_sum = 0
         total_weight = 0
 
-        for poste, prediction in predictions_postes.items():
-            if poste in self.poste_weights:
-                weight = self.poste_weights[poste]
+        for station, prediction in predictions_stations.items():
+            if station in self.station_weights:
+                weight = self.station_weights[station]
                 weighted_sum += prediction * weight
                 total_weight += weight
 
         return weighted_sum / total_weight if total_weight > 0 else 0
 
-    def identify_postes(self, data):
-        """Identifie les postes en CONSERVANT STRICTEMENT les noms de colonnes originaux"""
-        postes_cols = []
-        
-        # D'abord, chercher les colonnes avec des mots-clés spécifiques
-        defaut_keywords = ['defauts', 'defaut', 'defect', 'rework', 'echec', 'fail']
+    def identify_stations(self, data):
+        """Identify stations while preserving original column names"""
+        station_cols = []
+        defect_keywords = ['defects', 'defect', 'rework', 'failed', 'fail', 'defauts']
         
         for col in data.columns:
-            if any(keyword in col.lower() for keyword in defaut_keywords):
-                postes_cols.append(col)  # AJOUTER LE NOM EXACT DE LA COLONNE
+            if any(keyword in col.lower() for keyword in defect_keywords):
+                station_cols.append(col)
         
-        # Si aucune colonne trouvée avec les mots-clés, utiliser l'approche par exclusion
-        if not postes_cols:
-            excluded_keywords = ['jour', 'volume', 'production', 'date', 'time', 'day', 'week']
+        if not station_cols:
+            excluded_keywords = ['day', 'volume', 'production', 'date', 'time', 'week']
             for col in data.columns:
                 is_excluded = any(keyword in col.lower() for keyword in excluded_keywords)
                 if not is_excluded and pd.api.types.is_numeric_dtype(data[col]):
-                    postes_cols.append(col)  # AJOUTER LE NOM EXACT DE LA COLONNE
+                    station_cols.append(col)
         
-        if not postes_cols:
-            raise ValueError("Aucune colonne de défauts identifiée! Vérifiez que vos données contiennent des colonnes numériques représentant les défauts par poste.")
+        if not station_cols:
+            raise ValueError("No defect columns identified!")
         
-        self.postes = postes_cols  # CONSERVER LES NOMS EXACTS
-        st.info(f"📍 Postes identifiés (noms conservés): {postes_cols}")
-        return postes_cols
+        self.stations = station_cols
+        st.info(f"📍 Stations identified: {station_cols}")
+        return station_cols
 
-    def prepare_data_for_poste(self, data, poste_col):
-        """Version qui garde STRICTEMENT les noms de colonnes originaux"""
+    def prepare_data_for_station(self, data, station_col):
+        """Prepare data for a station"""
         data_copy = data.copy()
 
-        # Identification flexible des colonnes jour et volume SANS LES RENOMMER
-        jour_col = None
+        day_col = None
         volume_col = None
         
-        # Chercher la colonne jour
-        jour_keywords = ['jour', 'day', 'date', 'semaine', 'week']
+        day_keywords = ['day', 'date', 'week', 'jour', 'semaine']
         for col in data.columns:
-            if any(keyword in col.lower() for keyword in jour_keywords):
-                jour_col = col
+            if any(keyword in col.lower() for keyword in day_keywords):
+                day_col = col
                 break
         
-        # Chercher la colonne volume
-        volume_keywords = ['volume', 'production', 'quantite', 'qty']
+        volume_keywords = ['volume', 'production', 'quantity', 'qty', 'quantite']
         for col in data.columns:
             if any(keyword in col.lower() for keyword in volume_keywords):
                 volume_col = col
                 break
 
-        if not jour_col or not volume_col:
-            available_cols = list(data.columns)
-            raise ValueError(f"Colonnes 'jour' et 'volume' requises! Colonnes disponibles: {available_cols}")
+        if not day_col or not volume_col:
+            raise ValueError(f"'Day' and 'Volume' columns required!")
 
-        # GARDER LES NOMS ORIGINAUX
-        self.jour_col = jour_col
+        self.day_col = day_col
         self.volume_col = volume_col
 
-        # Conversion du jour en numérique SI NÉCESSAIRE mais DANS LA MÊME COLONNE
         try:
-            # Si c'est une colonne datetime ou texte, la convertir en place
-            if data_copy[jour_col].dtype == 'object':
+            if data_copy[day_col].dtype == 'object':
                 try:
-                    # Essayer de convertir en datetime puis extraire le jour de la semaine
-                    data_copy[jour_col] = pd.to_datetime(data_copy[jour_col]).dt.dayofweek + 1
+                    data_copy[day_col] = pd.to_datetime(data_copy[day_col]).dt.dayofweek + 1
                 except:
-                    # Si échec, essayer conversion directe en numérique
-                    try:
-                        data_copy[jour_col] = pd.to_numeric(data_copy[jour_col], errors='coerce')
-                    except:
-                        # Si ça échoue aussi, garder tel quel
-                        pass
-        except Exception as e:
-            st.warning(f"Attention: Problème avec la colonne jour ({jour_col}): {e}")
+                    data_copy[day_col] = pd.to_numeric(data_copy[day_col], errors='coerce')
+        except:
+            pass
 
-        # Vérifier que la colonne de poste existe
-        if poste_col not in data_copy.columns:
-            raise ValueError(f"Colonne de poste '{poste_col}' non trouvée dans les données!")
+        if station_col not in data_copy.columns:
+            raise ValueError(f"Station column '{station_col}' not found!")
 
-        # Utiliser DIRECTEMENT les colonnes originales
-        X = data_copy[[volume_col, jour_col]].copy()
-        y = data_copy[poste_col].copy()
+        X = data_copy[[volume_col, day_col]].copy()
+        y = data_copy[station_col].copy()
         
-        # Nettoyer les données
         mask = (~X.isnull().any(axis=1)) & (~y.isnull())
         X = X[mask]
         y = y[mask]
         
         if len(X) == 0:
-            raise ValueError("Aucune donnée valide après nettoyage!")
+            raise ValueError("No valid data after cleaning!")
 
-        return X, y, jour_col, volume_col
+        return X, y, day_col, volume_col
 
-    def train_model_for_poste(self, X, y, poste_name, jour_col, volume_col, search_method='grid', n_iter=20):
+    def train_model_for_station(self, X, y, station_name, day_col, volume_col, search_method='grid', n_iter=20):
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-        numerical_features = [volume_col, jour_col]
+        numerical_features = [volume_col, day_col]
         preprocessor = ColumnTransformer(
             transformers=[('num', StandardScaler(), numerical_features)]
         )
 
         transformer = preprocessor.fit(X_train)
-        self.transformers[poste_name] = transformer
+        self.transformers[station_name] = transformer
 
         models = {
-            'DecisionTree': Pipeline([
-                ('preprocessor', preprocessor),
-                ('model', DecisionTreeRegressor(random_state=42))
-            ]),
-            'RandomForest': Pipeline([
-                ('preprocessor', preprocessor),
-                ('model', RandomForestRegressor(random_state=42))
-            ]),
-            'GradientBoosting': Pipeline([
-                ('preprocessor', preprocessor),
-                ('model', GradientBoostingRegressor(random_state=42))
-            ]),
-            'NeuralNetwork': Pipeline([
-                ('preprocessor', preprocessor),
-                ('model', MLPRegressor(max_iter=1000, random_state=42))
-            ])
+            'DecisionTree': Pipeline([('preprocessor', preprocessor), ('model', DecisionTreeRegressor(random_state=42))]),
+            'RandomForest': Pipeline([('preprocessor', preprocessor), ('model', RandomForestRegressor(random_state=42))]),
+            'GradientBoosting': Pipeline([('preprocessor', preprocessor), ('model', GradientBoostingRegressor(random_state=42))]),
+            'NeuralNetwork': Pipeline([('preprocessor', preprocessor), ('model', MLPRegressor(max_iter=1000, random_state=42))])
         }
 
         param_grids = {
-            'DecisionTree': {
-                'model__max_depth': [None, 5, 10, 15],
-                'model__min_samples_split': [2, 5, 10],
-                'model__min_samples_leaf': [1, 2, 4]
-            },
-            'RandomForest': {
-                'model__n_estimators': [50, 100, 150],
-                'model__max_depth': [None, 10, 15],
-                'model__min_samples_split': [2, 5]
-            },
-            'GradientBoosting': {
-                'model__n_estimators': [50, 100, 150],
-                'model__learning_rate': [0.01, 0.05, 0.1],
-                'model__max_depth': [3, 5, 7]
-            },
-            'NeuralNetwork': {
-                'model__hidden_layer_sizes': [(50,), (100,), (50, 50), (100, 50)],
-                'model__alpha': [0.0001, 0.001, 0.01]
-            }
+            'DecisionTree': {'model__max_depth': [None, 5, 10, 15], 'model__min_samples_split': [2, 5, 10], 'model__min_samples_leaf': [1, 2, 4]},
+            'RandomForest': {'model__n_estimators': [50, 100, 150], 'model__max_depth': [None, 10, 15], 'model__min_samples_split': [2, 5]},
+            'GradientBoosting': {'model__n_estimators': [50, 100, 150], 'model__learning_rate': [0.01, 0.05, 0.1], 'model__max_depth': [3, 5, 7]},
+            'NeuralNetwork': {'model__hidden_layer_sizes': [(50,), (100,), (50, 50), (100, 50)], 'model__alpha': [0.0001, 0.001, 0.01]}
         }
 
         best_score = float('inf')
         best_model_name = None
         best_model = None
-        best_params = None
         all_results = {}
 
         for name, model in models.items():
-            if search_method == 'grid':
-                search = GridSearchCV(
-                    model,
-                    param_grids[name],
-                    cv=TimeSeriesSplit(n_splits=5),
-                    scoring='neg_mean_squared_error',
-                    n_jobs=-1
-                )
-            else:
-                search = RandomizedSearchCV(
-                    model,
-                    param_grids[name],
-                    n_iter=n_iter,
-                    cv=TimeSeriesSplit(n_splits=5),
-                    scoring='neg_mean_squared_error',
-                    random_state=42,
-                    n_jobs=-1
-                )
-
+            search = GridSearchCV(model, param_grids[name], cv=TimeSeriesSplit(n_splits=5), scoring='neg_mean_squared_error', n_jobs=-1) if search_method == 'grid' else RandomizedSearchCV(model, param_grids[name], n_iter=n_iter, cv=TimeSeriesSplit(n_splits=5), scoring='neg_mean_squared_error', random_state=42, n_jobs=-1)
             search.fit(X_train, y_train)
             y_pred_test = search.predict(X_test)
             mse = mean_squared_error(y_test, y_pred_test)
             mae = mean_absolute_error(y_test, y_pred_test)
             r2 = r2_score(y_test, y_pred_test)
             
-            all_results[name] = {
-                'mse': mse,
-                'mae': mae,
-                'r2': r2,
-                'best_params': search.best_params_,
-                'cv_score': search.best_score_
-            }
+            all_results[name] = {'mse': mse, 'mae': mae, 'r2': r2, 'best_params': search.best_params_, 'cv_score': search.best_score_}
 
             if mse < best_score:
                 best_score = mse
                 best_model_name = name
                 best_model = search.best_estimator_
-                best_params = search.best_params_
 
-        self.models[poste_name] = best_model
-        self.best_model_names[poste_name] = best_model_name
+        self.models[station_name] = best_model
+        self.best_model_names[station_name] = best_model_name
 
         y_pred = best_model.predict(X_test)
         mse = mean_squared_error(y_test, y_pred)
@@ -333,2040 +250,323 @@ class MultiPosteDefectPredictor:
 
         if best_model_name in ['DecisionTree', 'RandomForest', 'GradientBoosting']:
             model_step = best_model.named_steps['model']
-            self.feature_importances[poste_name] = pd.DataFrame({
-                'feature': numerical_features,
-                'importance': model_step.feature_importances_
-            }).sort_values('importance', ascending=False)
+            self.feature_importances[station_name] = pd.DataFrame({'feature': numerical_features, 'importance': model_step.feature_importances_}).sort_values('importance', ascending=False)
 
-        return {
-            'model_name': best_model_name,
-            'mse': mse,
-            'mae': mae,
-            'r2': r2,
-            'y_test': y_test,
-            'y_pred': y_pred,
-            'X_test': X_test,
-            'best_params': best_params,
-            'all_results': all_results  # Ajouter tous les résultats
-        }
+        return {'model_name': best_model_name, 'mse': mse, 'mae': mae, 'r2': r2, 'all_results': all_results}
 
-    def train_all_postes(self, data, search_method='grid'):
-        postes = self.identify_postes(data)
-
-        if not postes:
-            raise ValueError("Aucun poste identifié dans les données!")
+    def train_all_stations(self, data, search_method='grid'):
+        stations = self.identify_stations(data)
+        if not stations:
+            raise ValueError("No stations identified!")
 
         results = {}
-        for poste in postes:
-            X, y, jour_col, volume_col = self.prepare_data_for_poste(data, poste)
-            results[poste] = self.train_model_for_poste(X, y, poste, jour_col, volume_col, search_method=search_method)
+        for station in stations:
+            X, y, day_col, volume_col = self.prepare_data_for_station(data, station)
+            results[station] = self.train_model_for_station(X, y, station, day_col, volume_col, search_method=search_method)
 
-        self.set_poste_weights()
-        return results, postes
+        self.set_station_weights()
+        return results, stations
 
-    def predict_single_scenario(self, jour, volume):
+    def predict_single_scenario(self, day, volume):
         if not self.models:
-            raise ValueError("Les modèles doivent être entraînés avant de faire des prédictions!")
+            raise ValueError("Models must be trained before predictions!")
 
-        # Utiliser TOUJOURS les noms de colonnes originaux
-        new_data = pd.DataFrame({
-            self.volume_col: [volume],
-            self.jour_col: [jour]
-        })
-        X_new = new_data[[self.volume_col, self.jour_col]]
+        new_data = pd.DataFrame({self.volume_col: [volume], self.day_col: [day]})
+        X_new = new_data[[self.volume_col, self.day_col]]
 
-        predictions_postes = {}
-        for poste, model in self.models.items():
-            predictions_postes[poste] = model.predict(X_new)[0]
+        predictions_stations = {}
+        for station, model in self.models.items():
+            predictions_stations[station] = model.predict(X_new)[0]
 
-        predictions_chaine = {
-            'max': max(predictions_postes.values()),
-            'moyenne': np.mean(list(predictions_postes.values())),
-            'moyenne_ponderee': self.calculate_weighted_average(predictions_postes),
-            'somme': sum(predictions_postes.values())
+        predictions_chain = {
+            'max': max(predictions_stations.values()),
+            'average': np.mean(list(predictions_stations.values())),
+            'weighted_average': self.calculate_weighted_average(predictions_stations),
+            'sum': sum(predictions_stations.values())
         }
 
-        taux_rework_postes = {}
-        for poste, defauts in predictions_postes.items():
-            taux_rework_postes[poste] = (defauts / volume) * 100
-
-        taux_rework_chaine = {}
-        for method, defauts in predictions_chaine.items():
-            taux_rework_chaine[method] = (defauts / volume) * 100
-
-        prediction_record = {
-            'jour': jour,
-            'volume': volume,
-            'predictions_postes': predictions_postes,
-            'predictions_chaine': predictions_chaine,
-            'taux_rework_postes': taux_rework_postes,
-            'taux_rework_chaine': taux_rework_chaine
-        }
-        self.predictions_history.append(prediction_record)
-
-        return prediction_record
-
-# Le reste du code reste identique, juste les parties modifiées pour l'interface
-
-class StochasticPlanningModelComplete:
-    """
-    Modèle de planification stochastique avancé avec analyse multicritères
-    Adapté pour l'intégration avec la prédiction de défauts
-    """
-
-    def __init__(self):
-        """Initialisation du modèle"""
-        self.model = None
-        self.variables = {}
-        self.results = {}
-        self.parameters = {}
-        self.scenario_analysis = {}
-        self.multicriteria_scores = {}
-        self.best_scenario_selection = {}
-        self.predicted_rework_rate = None
-
-    def set_parameters(self,
-                      S: int = 5,
-                      T: int = 3,
-                      R: List[str] = None,
-                      EDI: List = None,
-                      p: List[List] = None,
-                      D: List[List] = None,
-                      seuil: float = 0.95,
-                      mean_capacity: float = 160,
-                      std_capacity: float = 10,
-                      mean_defaut: float = 0.04,
-                      std_defaut: float = 0.01,
-                      m: int = 5,
-                      alpha_rework: float = 0.8,
-                      beta: float = 1.2,
-                      b: int = 10,
-                      penalite_penurie: float = 1000,
-                      # Paramètres analyse multicritères
-                      poids_cout: float = 0.25,
-                      poids_satisfaction: float = 0.30,
-                      poids_utilisation: float = 0.20,
-                      poids_stabilite: float = 0.15,
-                      poids_penuries: float = 0.10,
-                      # Paramètres pour l'intégration prédiction
-                      use_predicted_rework: bool = False,
-                      predicted_rework_rate: float = None):
-        """
-        Configuration complète du modèle avec paramètres stochastiques configurables
-        """
-
-        # 10 références par défaut
-        if R is None:
-            R = [f'REF_{i+1:02d}' for i in range(10)]
-
-        # Demande client par défaut pour 10 références
-        if EDI is None:
-            EDI = [20, 35, 45, 25, 40, 50, 22, 38, 30, 42]
-
-        # Si des demandes personnalisées sont fournies sous forme de liste
-        if isinstance(EDI, list):
-            EDI_dict = {R[i]: EDI[i] for i in range(min(len(R), len(EDI)))}
-        else:
-            EDI_dict = EDI
-
-        # Matrice P (différence de MH) 10x10
-        if p is None:
-            p = [
-                [0, 0.20, 0.30, 0.15, 0.25, 0.35, 0.12, 0.22, 0.32, 0.18],
-                [0.20, 0, 0.40, 0.25, 0.35, 0.45, 0.22, 0.32, 0.42, 0.28],
-                [0.30, 0.40, 0, 0.35, 0.45, 0.55, 0.32, 0.42, 0.52, 0.38],
-                [0.15, 0.25, 0.35, 0, 0.30, 0.40, 0.17, 0.27, 0.37, 0.23],
-                [0.25, 0.35, 0.45, 0.30, 0, 0.50, 0.27, 0.37, 0.47, 0.33],
-                [0.35, 0.45, 0.55, 0.40, 0.50, 0, 0.37, 0.47, 0.57, 0.43],
-                [0.12, 0.22, 0.32, 0.17, 0.27, 0.37, 0, 0.24, 0.34, 0.20],
-                [0.22, 0.32, 0.42, 0.27, 0.37, 0.47, 0.24, 0, 0.44, 0.30],
-                [0.32, 0.42, 0.52, 0.37, 0.47, 0.57, 0.34, 0.44, 0, 0.40],
-                [0.18, 0.28, 0.38, 0.23, 0.33, 0.43, 0.20, 0.30, 0.40, 0]
-            ]
-
-        # Matrice D (similarité) 10x10
-        if D is None:
-            D = [
-                [1.0, 0.2, 0.4, 0.3, 0.1, 0.5, 0.2, 0.3, 0.4, 0.1],
-                [0.2, 1.0, 0.6, 0.4, 0.3, 0.2, 0.5, 0.4, 0.3, 0.6],
-                [0.4, 0.6, 1.0, 0.5, 0.4, 0.3, 0.6, 0.5, 0.2, 0.7],
-                [0.3, 0.4, 0.5, 1.0, 0.6, 0.4, 0.3, 0.7, 0.5, 0.4],
-                [0.1, 0.3, 0.4, 0.6, 1.0, 0.5, 0.4, 0.6, 0.7, 0.3],
-                [0.5, 0.2, 0.3, 0.4, 0.5, 1.0, 0.3, 0.2, 0.4, 0.6],
-                [0.2, 0.5, 0.6, 0.3, 0.4, 0.3, 1.0, 0.5, 0.3, 0.7],
-                [0.3, 0.4, 0.5, 0.7, 0.6, 0.2, 0.5, 1.0, 0.4, 0.5],
-                [0.4, 0.3, 0.2, 0.5, 0.7, 0.4, 0.3, 0.4, 1.0, 0.6],
-                [0.1, 0.6, 0.7, 0.4, 0.3, 0.6, 0.7, 0.5, 0.6, 1.0]
-            ]
-
-        # Conversion en dictionnaire pour PuLP
-        p_dict = {}
-        for i in range(len(R)):
-            for j in range(len(R)):
-                p_dict[(R[i], j)] = p[i][j]
-
-        D_array = np.array(D)
-
-        # GÉNÉRATION STOCHASTIQUE CONFIGURABLE DES PARAMÈTRES
-        np.random.seed(42)
-        
-        # Capacités stochastiques avec paramètres configurables
-        CAPchaine = {}
-        for s in range(S):
-            for t in range(T):
-                capacite = max(50, np.random.normal(mean_capacity, std_capacity))
-                CAPchaine[(s, t)] = capacite
-        
-        # Taux de défaut stochastiques configurables
-        taux_defaut = {}
-        
-        if use_predicted_rework and predicted_rework_rate is not None:
-            # Utiliser le taux prédit avec variation configurable
-            base_rate = predicted_rework_rate / 100  # Conversion de pourcentage
-            self.predicted_rework_rate = predicted_rework_rate
-            
-            for s in range(S):
-                for i in R:
-                    # Variation autour du taux prédit selon std_defaut
-                    defaut = max(0.001, min(0.25, np.random.normal(base_rate, std_defaut)))
-                    taux_defaut[(s, i)] = defaut
-        else:
-            # Génération stochastique selon les paramètres configurés
-            for s in range(S):
-                for i in R:
-                    defaut = max(0.001, min(0.25, np.random.normal(mean_defaut, std_defaut)))
-                    taux_defaut[(s, i)] = defaut
-
-        self.parameters = {
-            'S': S, 'T': T, 'R': R, 'EDI': EDI_dict, 'p': p_dict, 'D': D_array,
-            'seuil': seuil, 'CAPchaine': CAPchaine, 'm': m, 'taux_defaut': taux_defaut,
-            'alpha_rework': alpha_rework, 'beta': beta, 'b': b, 'penalite_penurie': penalite_penurie,
-            'mean_capacity': mean_capacity, 'std_capacity': std_capacity,
-            'mean_defaut': mean_defaut, 'std_defaut': std_defaut,
-            'poids_cout': poids_cout, 'poids_satisfaction': poids_satisfaction,
-            'poids_utilisation': poids_utilisation, 'poids_stabilite': poids_stabilite,
-            'poids_penuries': poids_penuries,
-            'use_predicted_rework': use_predicted_rework,
-            'predicted_rework_rate': predicted_rework_rate
-        }
-
-    def create_model(self):
-        """Création du modèle d'optimisation"""
-        params = self.parameters
-        S, T, R = params['S'], params['T'], params['R']
-
-        self.model = plp.LpProblem("Planification_Stochastique_Complete", plp.LpMinimize)
-
-        # Variables de décision
-        # Variables binaires de séquencement
-        self.variables['x'] = plp.LpVariable.dicts(
-            "x",
-            [(i, j, s, t) for i in R for j in range(len(R)) for s in range(S) for t in range(T)],
-            cat='Binary'
-        )
-
-        # Variables continues de production
-        self.variables['q'] = plp.LpVariable.dicts(
-            "q",
-            [(s, i, t) for s in range(S) for i in R for t in range(T)],
-            lowBound=0,
-            cat='Continuous'
-        )
-
-        # Variables de pénurie
-        self.variables['penurie'] = plp.LpVariable.dicts(
-            "penurie",
-            [(s, i) for s in range(S) for i in R],
-            lowBound=0,
-            cat='Continuous'
-        )
-
-    def add_constraints(self):
-        """Ajout des contraintes du modèle"""
-        params = self.parameters
-        S, T, R = params['S'], params['T'], params['R']
-        x, q, penurie = self.variables['x'], self.variables['q'], self.variables['penurie']
-
-        # 1. Satisfaction de la demande avec rework
-        for s in range(S):
-            for i in R:
-                demande_satisfaite = plp.lpSum([
-                    q[(s, i, t)] * (1 - params['taux_defaut'][(s, i)]) +
-                    params['alpha_rework'] * q[(s, i, t)] * params['taux_defaut'][(s, i)]
-                    for t in range(T)
-                ])
-                self.model += (
-                    demande_satisfaite + penurie[(s, i)] >= params['EDI'][i],
-                    f"Demande_s{s}_i{i}"
-                )
-
-        # 2. Contraintes de capacité
-        for s in range(S):
-            for t in range(T):
-                capacite_utilisee = plp.lpSum([
-                    q[(s, i, t)] * (1 + params['beta'] * params['taux_defaut'][(s, i)])
-                    for i in R
-                ])
-                self.model += (
-                    capacite_utilisee <= params['CAPchaine'][(s, t)],
-                    f"Capacite_s{s}_t{t}"
-                )
-
-        # 3. Contraintes de séquencement
-        for s in range(S):
-            for t in range(T):
-                # Une référence par position
-                for j in range(len(R)):
-                    self.model += (
-                        plp.lpSum([x[(i, j, s, t)] for i in R]) == 1,
-                        f"Position_s{s}_t{t}_j{j}"
-                    )
-                
-                # Une position par référence (max)
-                for i in R:
-                    self.model += (
-                        plp.lpSum([x[(i, j, s, t)] for j in range(len(R))]) <= 1,
-                        f"Reference_s{s}_t{t}_i{i}"
-                    )
-
-        # 4. Production minimale
-        for s in range(S):
-            for i in R:
-                for t in range(T):
-                    taux_defaut_si = params['taux_defaut'][(s, i)]
-                    if taux_defaut_si < 0.99:
-                        production_requise = params['m'] / (1 - taux_defaut_si + params['alpha_rework'] * taux_defaut_si)
-                    else:
-                        production_requise = params['m'] * 2
-                    
-                    self.model += (
-                        q[(s, i, t)] >= production_requise * plp.lpSum([x[(i, j, s, t)] for j in range(len(R))]),
-                        f"Production_min_s{s}_i{i}_t{t}"
-                    )
-
-    def set_objective(self):
-        """Définition de la fonction objectif"""
-        params = self.parameters
-        S, T, R = params['S'], params['T'], params['R']
-        q, penurie = self.variables['q'], self.variables['penurie']
-
-        # Coût de production
-        cout_production = plp.lpSum([
-            20 * q[(s, i, t)]
-            for s in range(S) for i in R for t in range(T)
-        ])
-
-        # Coût des pénuries
-        cout_penuries = plp.lpSum([
-            params['penalite_penurie'] * penurie[(s, i)]
-            for s in range(S) for i in R
-        ])
-
-        # Objectif : minimiser les coûts totaux
-        self.model += cout_production + cout_penuries
-
-    def solve_model(self, solver_name='PULP_CBC_CMD', time_limit=300):
-        """Résolution du modèle"""
-        try:
-            if solver_name == 'PULP_CBC_CMD':
-                solver = plp.PULP_CBC_CMD(timeLimit=time_limit, msg=0)
-            else:
-                solver = plp.getSolver(solver_name)
-
-            self.model.solve(solver)
-
-            if self.model.status == plp.LpStatusOptimal:
-                self._extract_results()
-                return True
-            else:
-                return False
-
-        except Exception as e:
-            st.error(f"Erreur lors de la résolution: {e}")
-            return False
-
-    def _extract_results(self):
-        """Extraction des résultats de la solution"""
-        params = self.parameters
-        S, T, R = params['S'], params['T'], params['R']
-
-        # Production par scénario
-        production_results = {}
-        for s in range(S):
-            for i in R:
-                for t in range(T):
-                    key = (s, i, t)
-                    value = self.variables['q'][key].value()
-                    production_results[key] = value if value is not None else 0
-
-        # Pénuries par scénario
-        penuries_results = {}
-        for s in range(S):
-            for i in R:
-                key = (s, i)
-                value = self.variables['penurie'][key].value()
-                penuries_results[key] = value if value is not None else 0
-
-        # Séquencement par scénario
-        sequencement_results = {}
-        for s in range(S):
-            for t in range(T):
-                sequence = {}
-                for i in R:
-                    for j in range(len(R)):
-                        key = (i, j, s, t)
-                        value = self.variables['x'][key].value()
-                        if value is not None and value > 0.5:
-                            sequence[j] = i
-                sequencement_results[(s, t)] = sequence
-
-        self.results = {
-            'production': production_results,
-            'penuries': penuries_results,
-            'sequencement': sequencement_results,
-            'cout_total': self.model.objective.value()
-        }
-
-    def analyze_scenarios_detailed(self):
-        """Analyse détaillée des scénarios pour Streamlit"""
-        if not self.results:
-            return
-
-        params = self.parameters
-        S, T, R = params['S'], params['T'], params['R']
-        production = self.results['production']
-        penuries = self.results['penuries']
-        sequencement = self.results['sequencement']
-
-        self.scenario_analysis = {}
-
-        for s in range(S):
-            scenario_data = {
-                'scenario_id': s + 1,
-                'shifts_details': {},
-                'production_summary': {},
-                'kpis': {}
-            }
-
-            # Analyse par shift
-            total_capacity_used = 0
-            total_capacity_available = 0
-
-            for t in range(T):
-                shift_info = {
-                    'execution_order': [],
-                    'quantities': {},
-                    'capacity_used': 0,
-                    'capacity_available': params['CAPchaine'][(s, t)]
-                }
-
-                # Ordre d'exécution
-                sequence = sequencement.get((s, t), {})
-                ordered_refs = []
-                for j in range(len(R)):
-                    ref = sequence.get(j, 'VIDE')
-                    ordered_refs.append(ref)
-                shift_info['execution_order'] = ordered_refs
-
-                # Quantités et capacité utilisée
-                capacity_used = 0
-                for i in R:
-                    qty = production[(s, i, t)]
-                    if qty > 0:
-                        shift_info['quantities'][i] = qty
-                        taux_def = params['taux_defaut'][(s, i)]
-                        capacity_used += qty * (1 + params['beta'] * taux_def)
-
-                shift_info['capacity_used'] = capacity_used
-                if shift_info['capacity_available'] > 0:
-                    shift_info['capacity_utilization'] = (capacity_used / shift_info['capacity_available']) * 100
-                else:
-                    shift_info['capacity_utilization'] = 0
-
-                total_capacity_used += capacity_used
-                total_capacity_available += shift_info['capacity_available']
-
-                scenario_data['shifts_details'][t+1] = shift_info
-
-            # Résumé production par référence
-            total_production_utile = 0
-            total_demande = sum(params['EDI'].values())
-            total_penuries = 0
-
-            for i in R:
-                total_prod = sum(production[(s, i, t)] for t in range(T))
-                
-                # Production utile avec rework
-                total_utile = 0
-                for t in range(T):
-                    qty = production[(s, i, t)]
-                    taux_def = params['taux_defaut'][(s, i)]
-                    pieces_bonnes = qty * (1 - taux_def)
-                    pieces_rework_ok = qty * taux_def * params['alpha_rework']
-                    total_utile += pieces_bonnes + pieces_rework_ok
-
-                penurie = penuries[(s, i)]
-                demande = params['EDI'][i]
-                taux_couverture = (total_utile / demande) * 100 if demande > 0 else 0
-
-                scenario_data['production_summary'][i] = {
-                    'demande': demande,
-                    'production_brute': total_prod,
-                    'production_utile': total_utile,
-                    'penurie': penurie,
-                    'taux_couverture': taux_couverture
-                }
-
-                total_production_utile += total_utile
-                total_penuries += penurie
-
-            # Calcul des KPIs du scénario
-            cout_production = sum([production[(s, i, t)] * 20 for i in R for t in range(T)])
-            cout_penuries = total_penuries * params['penalite_penurie']
-            cout_total = cout_production + cout_penuries
-
-            # Stabilité (variance des productions par shift)
-            productions_par_shift = []
-            for t in range(T):
-                prod_shift = sum(production[(s, i, t)] for i in R)
-                productions_par_shift.append(prod_shift)
-            
-            if len(productions_par_shift) > 1:
-                variance_production = np.var(productions_par_shift)
-                stabilite = max(0, 100 - variance_production / 10)
-            else:
-                stabilite = 100
-
-            scenario_kpis = {
-                'satisfaction_globale': (total_production_utile / total_demande) * 100 if total_demande > 0 else 0,
-                'utilisation_capacite': (total_capacity_used / total_capacity_available) * 100 if total_capacity_available > 0 else 0,
-                'total_penuries': total_penuries,
-                'cout_total': cout_total,
-                'cout_production': cout_production,
-                'cout_penuries': cout_penuries,
-                'stabilite': stabilite,
-                'efficacite_production': total_production_utile / max(1, total_capacity_used)
-            }
-
-            scenario_data['kpis'] = scenario_kpis
-            self.scenario_analysis[s] = scenario_data
-
-    def calculate_multicriteria_scores(self):
-        """Calcul des scores multicritères"""
-        if not self.scenario_analysis:
-            return
-
-        params = self.parameters
-        S = params['S']
-
-        # Extraction des valeurs des critères
-        criteria_values = {
-            'cout': [self.scenario_analysis[s]['kpis']['cout_total'] for s in range(S)],
-            'satisfaction': [self.scenario_analysis[s]['kpis']['satisfaction_globale'] for s in range(S)],
-            'utilisation': [self.scenario_analysis[s]['kpis']['utilisation_capacite'] for s in range(S)],
-            'stabilite': [self.scenario_analysis[s]['kpis']['stabilite'] for s in range(S)],
-            'penuries': [self.scenario_analysis[s]['kpis']['total_penuries'] for s in range(S)]
-        }
-
-        # Normalisation des critères
-        def normalize_criterion(values, inverse=False):
-            min_val, max_val = min(values), max(values)
-            if max_val == min_val:
-                return [1.0] * len(values)
-            
-            if inverse:
-                return [(max_val - v) / (max_val - min_val) for v in values]
-            else:
-                return [(v - min_val) / (max_val - min_val) for v in values]
-
-        normalized_criteria = {
-            'cout': normalize_criterion(criteria_values['cout'], inverse=True),
-            'satisfaction': normalize_criterion(criteria_values['satisfaction'], inverse=False),
-            'utilisation': normalize_criterion(criteria_values['utilisation'], inverse=False),
-            'stabilite': normalize_criterion(criteria_values['stabilite'], inverse=False),
-            'penuries': normalize_criterion(criteria_values['penuries'], inverse=True)
-        }
-
-        # Calcul des scores globaux pondérés
-        global_scores = {}
-        for s in range(S):
-            score = (
-                params['poids_cout'] * normalized_criteria['cout'][s] +
-                params['poids_satisfaction'] * normalized_criteria['satisfaction'][s] +
-                params['poids_utilisation'] * normalized_criteria['utilisation'][s] +
-                params['poids_stabilite'] * normalized_criteria['stabilite'][s] +
-                params['poids_penuries'] * normalized_criteria['penuries'][s]
-            )
-            global_scores[s] = score
-
-        self.multicriteria_scores = {
-            'normalized_criteria': normalized_criteria,
-            'global_scores': global_scores,
-            'criteria_values': criteria_values
-        }
-
-    def select_best_scenario_multicriteria(self):
-        """Sélection du meilleur scénario"""
-        if not self.multicriteria_scores:
-            return None
-
-        global_scores = self.multicriteria_scores['global_scores']
-        
-        # Identification du meilleur
-        best_scenario_id = max(global_scores, key=global_scores.get)
-        best_score = global_scores[best_scenario_id]
-
-        # Classement complet
-        sorted_scenarios = sorted(global_scores.items(), key=lambda x: x[1], reverse=True)
-        
-        # Analyse de robustesse
-        scores_values = list(global_scores.values())
-        gap_with_second = sorted_scenarios[0][1] - sorted_scenarios[1][1] if len(sorted_scenarios) > 1 else 0
-        robustness = "ÉLEVÉE" if gap_with_second > 0.1 else "MODÉRÉE" if gap_with_second > 0.05 else "FAIBLE"
-
-        self.best_scenario_selection = {
-            'best_scenario_id': best_scenario_id,
-            'best_score': best_score,
-            'ranking': sorted_scenarios,
-            'robustness': robustness,
-            'gap_with_second': gap_with_second
-        }
+        rework_rate_stations = {station: (defects / volume) * 100 for station, defects in predictions_stations.items()}
+        rework_rate_chain = {method: (defects / volume) * 100 for method, defects in predictions_chain.items()}
 
         return {
-            'best_scenario': best_scenario_id + 1,
-            'score': best_score,
-            'kpis': self.scenario_analysis[best_scenario_id]['kpis']
+            'day': day,
+            'volume': volume,
+            'predictions_stations': predictions_stations,
+            'predictions_chain': predictions_chain,
+            'rework_rate_stations': rework_rate_stations,
+            'rework_rate_chain': rework_rate_chain
         }
 
 class IntegratedPredictionPlanningSystem:
     def __init__(self):
         self.predictor = None
-        self.planner = None
         self.predicted_rework_rate = None
-        self.integration_results = {}
 
     def setup_prediction_system(self, data):
         self.predictor = MultiPosteDefectPredictor()
         self.predictor.original_data = data.copy()
-        results, postes = self.predictor.train_all_postes(data, search_method='grid')
-        # Stocker les résultats pour pouvoir les utiliser plus tard
-        self.prediction_training_results = results
-        return results, postes
+        results, stations = self.predictor.train_all_stations(data, search_method='grid')
+        return results, stations
 
-    def make_prediction_for_planning(self, jour, volume, method='moyenne_ponderee'):
+    def make_prediction_for_planning(self, day, volume, method='weighted_average'):
         if self.predictor is None:
-            raise ValueError("Le système de prédiction doit être configuré d'abord!")
+            raise ValueError("Prediction system must be configured first!")
 
-        prediction_result = self.predictor.predict_single_scenario(jour, volume)
-        taux_rework_chaine = prediction_result['taux_rework_chaine'][method]
-        self.predicted_rework_rate = taux_rework_chaine
+        prediction_result = self.predictor.predict_single_scenario(day, volume)
+        rework_rate_chain = prediction_result['rework_rate_chain'][method]
+        self.predicted_rework_rate = rework_rate_chain
 
         return {
             'prediction_details': prediction_result,
-            'rework_rate_for_planning': taux_rework_chaine,
+            'rework_rate_for_planning': rework_rate_chain,
             'method_used': method
         }
 
-    def setup_planning_system(self, predicted_rework_rate=None, demandes_personnalisees=None, **params):
-        if predicted_rework_rate is None:
-            predicted_rework_rate = self.predicted_rework_rate
-
-        if predicted_rework_rate is None:
-            raise ValueError("Aucun taux de rework prédit disponible!")
-
-        self.planner = StochasticPlanningModelComplete()
-        
-        # Si des demandes personnalisées sont fournies, les utiliser
-        if demandes_personnalisees is not None:
-            params['EDI'] = demandes_personnalisees
-
-        # Utiliser le taux prédit par défaut si activé
-        if params.get('use_predicted_rework', True):
-            params['predicted_rework_rate'] = predicted_rework_rate
-
-        self.planner.set_parameters(**params)
-        return True
-
-    def run_integrated_planning(self, time_limit=300):
-        if self.planner is None:
-            raise ValueError("Le système de planification doit être configuré d'abord!")
-
-        try:
-            self.planner.create_model()
-            self.planner.add_constraints()
-            self.planner.set_objective()
-            return self.planner.solve_model(time_limit=time_limit)
-        except Exception as e:
-            st.error(f"Erreur lors de l'exécution: {e}")
-            return False
-
-    def analyze_integrated_results(self):
-        if self.planner is None or not hasattr(self.planner, 'results') or not self.planner.results:
-            return None
-
-        self.planner.analyze_scenarios_detailed()
-        self.planner.calculate_multicriteria_scores()
-        self.planner.select_best_scenario_multicriteria()
-        
-        self.integration_results = {
-            'predicted_rework_rate': self.predicted_rework_rate,
-            'planning_results': self.planner.results,
-            'scenario_analysis': self.planner.scenario_analysis,
-            'multicriteria_scores': self.planner.multicriteria_scores,
-            'best_scenario_selection': self.planner.best_scenario_selection
-        }
-
-        return self.integration_results
-
-# Fonctions d'interface Streamlit
 def create_header():
-    """Créer l'en-tête avec les logos et le titre"""
-    
-    col1, col2, col3 = st.columns([1, 2, 1])
-    
-    with col1:
-        # Logo Yazaki stylisé
-        st.markdown("""
-        <div style='text-align: center; padding: 15px;'>
-            <div style='
-                background: linear-gradient(135deg, #1f4e79, #2c5aa0);
-                color: white;
-                padding: 20px;
-                border-radius: 15px;
-                box-shadow: 0 4px 15px rgba(31, 78, 121, 0.3);
-                margin: 10px;
-                border: 3px solid #1f4e79;
-            '>
-                <div style='font-size: 28px; margin-bottom: 8px;'>🏭</div>
-                <div style='font-weight: bold; font-size: 20px; letter-spacing: 1px;'>YAZAKI</div>
-                <div style='font-size: 12px; opacity: 0.9; margin-top: 5px;'>INDUSTRIAL SOLUTIONS</div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col2:
-        # Titre central
-        st.markdown("""
-        <div class="main-header">
-            <h1>🏭 Système Intégré Prédiction-Planification Avancé</h1>
-            <p>Prédiction de défauts et planification stochastique multicritères</p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col3:
-        # Logo ENSAM stylisé
-        st.markdown("""
-        <div style='text-align: center; padding: 15px;'>
-            <div style='
-                background: linear-gradient(135deg, #2e86ab, #3a9bc1);
-                color: white;
-                padding: 20px;
-                border-radius: 15px;
-                box-shadow: 0 4px 15px rgba(46, 134, 171, 0.3);
-                margin: 10px;
-                border: 3px solid #2e86ab;
-            '>
-                <div style='font-size: 28px; margin-bottom: 8px;'>🎓</div>
-                <div style='font-weight: bold; font-size: 20px; letter-spacing: 1px;'>ENSAM</div>
-                <div style='font-size: 12px; opacity: 0.9; margin-top: 5px;'>ARTS ET MÉTIERS</div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    # Ligne de séparation
-    st.markdown("---")
-    
-    # Bannière de partenariat
+    """Create header"""
     st.markdown("""
-    <div style='
-        text-align: center; 
-        padding: 15px; 
-        background: linear-gradient(90deg, rgba(31, 78, 121, 0.1), rgba(46, 134, 171, 0.1)); 
-        border-radius: 10px; 
-        margin-bottom: 20px;
-        border-left: 4px solid #1f4e79;
-        border-right: 4px solid #2e86ab;
-    '>
-        <div style='display: flex; justify-content: center; align-items: center; gap: 20px; flex-wrap: wrap;'>
-            <span style='color: #1f4e79; font-weight: bold; font-size: 16px;'>🏭 YAZAKI</span>
-            <span style='color: #666; font-size: 20px;'>⚡</span>
-            <span style='color: #2e86ab; font-weight: bold; font-size: 16px;'>ENSAM 🎓</span>
-        </div>
-        <div style='color: #666; margin-top: 8px; font-size: 14px; font-style: italic;'>
-            Partenariat Industriel-Académique | Innovation & Excellence | Planification Stochastique Avancée
-        </div>
+    <div class="main-header">
+        <h1>🏭 Advanced Prediction-Planning Integration System</h1>
+        <p>Defect Prediction & Multicriteria Stochastic Planning</p>
     </div>
     """, unsafe_allow_html=True)
 
 def load_data_section():
-    """FONCTION MODIFIÉE - Même traitement pour Excel et démo"""
-    st.header("📊 Chargement des Données")
+    """Load data section"""
+    st.header("📊 Load Data")
     
     col1, col2 = st.columns([2, 1])
     
     with col1:
         uploaded_file = st.file_uploader(
-            "Chargez votre fichier Excel contenant les données historiques",
+            "Upload your Excel file with historical data",
             type=['xlsx', 'xls'],
-            help="Le fichier doit contenir les colonnes: Jour, Volume_production, et les colonnes de défauts par poste"
+            help="File must contain: Day, Volume_production, and defect columns per station"
         )
     
     with col2:
-        if st.button("📝 Utiliser des données de démo", use_container_width=True):
-            with st.spinner("Génération des données de démonstration..."):
+        if st.button("📝 Use Demo Data", use_container_width=True):
+            with st.spinner("Generating demo data..."):
                 demo_data = create_demo_data()
-                st.success(f"✅ Données de démo générées: {len(demo_data)} lignes")
-                
-                # Affichage des données de démonstration
-                display_demo_data(demo_data)
-                
+                st.success(f"✅ Demo data generated: {len(demo_data)} rows")
+                display_data_info(demo_data)
                 return demo_data
     
     if uploaded_file is not None:
         try:
             data = pd.read_excel(uploaded_file)
-            st.success(f"✅ Données chargées: {len(data)} lignes, {len(data.columns)} colonnes")
-            
-            with st.expander("👀 Aperçu des données brutes"):
-                st.dataframe(data.head())
-                st.write("**Colonnes disponibles:**", list(data.columns))
-            
-            # MÊME TRAITEMENT QUE LES DONNÉES DE DÉMO
-            # Appeler la même fonction d'affichage que pour les données de démo
-            display_demo_data(data)
-            
+            st.success(f"✅ Data loaded: {len(data)} rows, {len(data.columns)} columns")
+            display_data_info(data)
             return data
-            
         except Exception as e:
-            st.error(f"❌ Erreur lors du chargement: {e}")
+            st.error(f"❌ Error loading: {e}")
             return None
     
     return None
 
-def display_demo_data(data):
-    """Affiche les données avec des statistiques et visualisations - GARDE TOUS LES NOMS ORIGINAUX"""
-    
-    # Déterminer automatiquement si ce sont des données de démo ou Excel
-    is_demo = set(['Jour', 'Volume_production', 'Poste1_defauts', 'Poste2_defauts', 'Poste3_defauts']).issubset(set(data.columns))
-    
-    if is_demo:
-        st.subheader("📊 Données de Démonstration Générées")
-    else:
-        st.subheader("📊 Analyse des Données Téléchargées")
-    
-    # Identification automatique des colonnes SANS LES RENOMMER - NOMS EXACTS CONSERVÉS
-    jour_col = None
-    volume_col = None
-    defaut_cols = []
-    
-    # Trouver la colonne jour - GARDER LE NOM EXACT
-    jour_keywords = ['jour', 'day', 'date', 'semaine', 'week']
-    for col in data.columns:
-        if any(keyword in col.lower() for keyword in jour_keywords):
-            jour_col = col  # GARDER LE NOM EXACT DE LA COLONNE
-            break
-    
-    # Trouver la colonne volume - GARDER LE NOM EXACT
-    volume_keywords = ['volume', 'production', 'quantite', 'qty']
-    for col in data.columns:
-        if any(keyword in col.lower() for keyword in volume_keywords):
-            volume_col = col  # GARDER LE NOM EXACT DE LA COLONNE
-            break
-    
-    # Trouver les colonnes de défauts - GARDER LES NOMS EXACTS
-    defaut_keywords = ['defauts', 'defaut', 'defect', 'rework', 'echec', 'fail']
-    for col in data.columns:
-        if any(keyword in col.lower() for keyword in defaut_keywords):
-            defaut_cols.append(col)  # AJOUTER LE NOM EXACT SANS MODIFICATION
-    
-    # Si pas trouvé par mots-clés, essayer par exclusion pour les défauts - GARDER LES NOMS EXACTS
-    if not defaut_cols:
-        excluded_keywords = ['jour', 'volume', 'production', 'date', 'time', 'day', 'week']
-        for col in data.columns:
-            is_excluded = any(keyword in col.lower() for keyword in excluded_keywords)
-            if not is_excluded and pd.api.types.is_numeric_dtype(data[col]):
-                defaut_cols.append(col)  # AJOUTER LE NOM EXACT SANS MODIFICATION
-    
-    # Statistiques générales
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric("Nombre de lignes", len(data))
-    
-    with col2:
-        if volume_col:
-            volume_moyen = data[volume_col].mean()
-            # AFFICHER LE NOM EXACT DE LA COLONNE
-            st.metric(f"Volume moyen\n({volume_col})", f"{volume_moyen:.0f}")
-        else:
-            st.metric("Volume moyen", "Non trouvé", help="Aucune colonne de volume identifiée")
-    
-    with col3:
-        if defaut_cols:
-            defauts_total = data[defaut_cols].sum().sum()
-            st.metric(f"Total défauts\n({len(defaut_cols)} postes)", f"{defauts_total:.0f}")
-        else:
-            st.metric("Total défauts", "Non trouvé", help="Aucune colonne de défauts identifiée")
-    
-    with col4:
-        if defaut_cols and volume_col:
-            taux_defaut_moyen = (defauts_total / data[volume_col].sum()) * 100
-            st.metric("Taux défaut moyen", f"{taux_defaut_moyen:.2f}%")
-        else:
-            st.metric("Taux défaut moyen", "Non calculable")
-    
-    # Affichage des colonnes identifiées - NOMS EXACTS CONSERVÉS
-    st.subheader("🔍 Colonnes Identifiées")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        if jour_col:
-            st.success(f"✅ **Jour:** {jour_col}")  # AFFICHER LE NOM EXACT
-        else:
-            st.error("❌ **Jour:** Non trouvé")
-    
-    with col2:
-        if volume_col:
-            st.success(f"✅ **Volume:** {volume_col}")  # AFFICHER LE NOM EXACT
-        else:
-            st.error("❌ **Volume:** Non trouvé")
-    
-    with col3:
-        if defaut_cols:
-            st.success(f"✅ **Défauts:** {len(defaut_cols)} colonnes")
-            # AFFICHER LES NOMS EXACTS DES POSTES
-            st.write(f"Postes: {', '.join(defaut_cols)}")
-        else:
-            st.error("❌ **Défauts:** Non trouvé")
-    
-    # Aperçu des données
-    with st.expander("👀 Aperçu des Données", expanded=True):
+def display_data_info(data):
+    """Display data information"""
+    with st.expander("👀 Data Preview", expanded=True):
         col1, col2 = st.columns([2, 1])
         
         with col1:
-            st.write("**Premières lignes des données:**")
+            st.write("**First rows:**")
             st.dataframe(data.head(10), use_container_width=True)
         
         with col2:
-            st.write("**Statistiques descriptives:**")
-            # Sélectionner seulement les colonnes numériques pour les stats
+            st.write("**Statistics:**")
             numeric_cols = data.select_dtypes(include=[np.number]).columns
             if len(numeric_cols) > 0:
-                stats_df = data[numeric_cols].describe().round(2)
-                st.dataframe(stats_df)
-            else:
-                st.write("Aucune colonne numérique trouvée")
-    
-    # NOUVEAU : Affichage explicite des noms de postes conservés
-    if defaut_cols:
-        st.subheader("🏷️ Noms des Postes Conservés")
-        st.info(f"📋 Les noms suivants seront utilisés tels quels dans tout le système : **{', '.join(defaut_cols)}**")
+                st.dataframe(data[numeric_cols].describe().round(2))
 
 def create_demo_data(n_days=100):
-    """Crée des données de démonstration avec des valeurs réalistes"""
+    """Create demo data"""
     np.random.seed(42)
     days = range(1, n_days + 1)
     data = []
 
     for day in days:
-        jour_semaine = ((day - 1) % 7) + 1
-        
-        if jour_semaine in [6, 7]:  # Weekend
-            volume_base = 800
-        else:  # Jours de semaine
-            volume_base = 1200
-
+        day_of_week = ((day - 1) % 7) + 1
+        volume_base = 800 if day_of_week in [6, 7] else 1200
         volume = volume_base + np.random.normal(0, 100)
         volume = max(volume, 100)
 
-        # Générer des défauts réalistes pour chaque poste
-        poste1_defauts = volume * 0.02 + jour_semaine * 0.5 + np.random.normal(0, 2)
-        poste2_defauts = volume * 0.015 + jour_semaine * 0.3 + np.random.normal(0, 1.5)
-        poste3_defauts = volume * 0.025 + jour_semaine * 0.4 + np.random.normal(0, 2.5)
-
-        # S'assurer que les défauts sont positifs
-        poste1_defauts = max(0, poste1_defauts)
-        poste2_defauts = max(0, poste2_defauts)
-        poste3_defauts = max(0, poste3_defauts)
+        defects_1 = max(0, volume * 0.02 + day_of_week * 0.5 + np.random.normal(0, 2))
+        defects_2 = max(0, volume * 0.015 + day_of_week * 0.3 + np.random.normal(0, 1.5))
+        defects_3 = max(0, volume * 0.025 + day_of_week * 0.4 + np.random.normal(0, 2.5))
 
         data.append({
-            'Jour': jour_semaine,
-            'Volume_production': volume,
-            'Poste1_defauts': poste1_defauts,
-            'Poste2_defauts': poste2_defauts,
-            'Poste3_defauts': poste3_defauts
+            'Day': day_of_week,
+            'Production_Volume': volume,
+            'Station1_Defects': defects_1,
+            'Station2_Defects': defects_2,
+            'Station3_Defects': defects_3
         })
 
     return pd.DataFrame(data)
 
 def prediction_section(system, data):
-    """FONCTION AMÉLIORÉE - Affichage des modèles optimaux avec NOMS DE POSTES ORIGINAUX"""
-    st.header("🔮 Prédiction de Défauts")
+    """Prediction section"""
+    st.header("🔮 Defect Prediction")
     
     if data is None:
-        st.warning("⚠️ Veuillez d'abord charger des données")
-        return None
+        st.warning("⚠️ Please load data first")
+        return False
     
-    # Configuration et entraînement du système de prédiction
     try:
-        with st.spinner("🧠 Entraînement des modèles de prédiction..."):
-            results, postes = system.setup_prediction_system(data)
+        with st.spinner("🧠 Training prediction models..."):
+            results, stations = system.setup_prediction_system(data)
         
-        if results and postes:
-            st.success("✅ Modèles de prédiction entraînés avec succès!")
+        if results and stations:
+            st.success("✅ Models trained successfully!")
             
-            # AFFICHAGE DES MODÈLES OPTIMAUX SÉLECTIONNÉS - NOMS ORIGINAUX CONSERVÉS
-            st.subheader("🏆 Modèles Optimaux Sélectionnés")
+            st.subheader("🏆 Optimal Models Selected")
             
-            # Tableau des modèles sélectionnés - NOMS DE POSTES ORIGINAUX
-            model_selection_data = []
-            for poste_nom_original in postes:  # UTILISER LES NOMS ORIGINAUX
-                if poste_nom_original in results:
-                    result = results[poste_nom_original]
-                    model_selection_data.append({
-                        'Poste': poste_nom_original,  # GARDER LE NOM EXACT ORIGINAL
-                        'Modèle Optimal': result['model_name'],
+            model_data = []
+            for station in stations:
+                if station in results:
+                    result = results[station]
+                    model_data.append({
+                        'Station': station,
+                        'Optimal Model': result['model_name'],
                         'MSE': f"{result['mse']:.4f}",
                         'MAE': f"{result['mae']:.4f}",
-                        'R²': f"{result['r2']:.4f}",
-                        'Paramètres Optimaux': str(result['best_params'])
+                        'R²': f"{result['r2']:.4f}"
                     })
             
-            df_models = pd.DataFrame(model_selection_data)
-            st.dataframe(df_models, use_container_width=True)
-            
-            # Affichage détaillé des résultats de sélection - NOMS ORIGINAUX
-            with st.expander("📊 Détails de la Sélection de Modèles", expanded=False):
-                for poste_nom_original in postes:  # UTILISER LES NOMS ORIGINAUX
-                    if poste_nom_original in results and 'all_results' in results[poste_nom_original]:
-                        st.write(f"### 🔍 {poste_nom_original}")  # AFFICHER LE NOM ORIGINAL
-                        
-                        all_results = results[poste_nom_original]['all_results']
-                        comparison_data = []
-                        
-                        for model_name, model_result in all_results.items():
-                            comparison_data.append({
-                                'Modèle': model_name,
-                                'MSE': f"{model_result['mse']:.4f}",
-                                'MAE': f"{model_result['mae']:.4f}",
-                                'R²': f"{model_result['r2']:.4f}",
-                                'Score CV': f"{model_result['cv_score']:.4f}",
-                                'Meilleur': "🏆" if model_name == results[poste_nom_original]['model_name'] else ""
-                            })
-                        
-                        df_comparison = pd.DataFrame(comparison_data)
-                        st.dataframe(df_comparison, use_container_width=True)
-                        
-                        # Graphique de comparaison - TITRE AVEC NOM ORIGINAL
-                        fig = px.bar(
-                            df_comparison, 
-                            x='Modèle', 
-                            y='R²',
-                            title=f'Comparaison R² pour {poste_nom_original}',  # NOM ORIGINAL
-                            color='R²',
-                            color_continuous_scale='viridis'
-                        )
-                        st.plotly_chart(fig, use_container_width=True)
-            
-            # Afficher le taux de rework initial - UTILISER LES NOMS ORIGINAUX
-            st.subheader("📊 Taux de Rework Initial de la Chaîne")
-            
-            # Calculer le taux moyen historique avec NOMS ORIGINAUX
-            postes_originaux = system.predictor.postes  # LISTE DES NOMS ORIGINAUX
-            taux_historiques = {}
-            
-            for poste_nom_original in postes_originaux:  # BOUCLE SUR NOMS ORIGINAUX
-                if poste_nom_original in data.columns and system.predictor.volume_col in data.columns:
-                    defauts_totaux = data[poste_nom_original].sum()  # UTILISER NOM ORIGINAL
-                    volume_total = data[system.predictor.volume_col].sum()
-                    taux_historiques[poste_nom_original] = (defauts_totaux / volume_total) * 100 if volume_total > 0 else 0
-            
-            # Calculer le taux pondéré historique avec NOMS ORIGINAUX
-            taux_pondere_historique = 0
-            if system.predictor.poste_weights:
-                for poste_nom_original, poids in system.predictor.poste_weights.items():  # BOUCLE SUR NOMS ORIGINAUX
-                    if poste_nom_original in taux_historiques:
-                        taux_pondere_historique += taux_historiques[poste_nom_original] * poids
-            
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                st.metric(
-                    "Taux Rework Historique (Moyenne Pondérée)",
-                    f"{taux_pondere_historique:.2f}%",
-                    help="Basé sur les données historiques avec pondération Q*D"
-                )
-            
-            with col2:
-                taux_moyen_simple = np.mean(list(taux_historiques.values())) if taux_historiques else 0
-                st.metric(
-                    "Taux Rework Historique (Moyenne Simple)",
-                    f"{taux_moyen_simple:.2f}%"
-                )
-            
-            with col3:
-                st.metric("Nombre de Postes", len(postes_originaux))
-            
-            # CONFIRMATION EXPLICITE DES NOMS CONSERVÉS
-            st.subheader("🏷️ Confirmation des Noms de Postes")
-            st.success(f"✅ **Noms de postes conservés:** {', '.join(postes_originaux)}")
-            
+            st.dataframe(pd.DataFrame(model_data), use_container_width=True)
             return True
         else:
-            st.error("❌ Échec de l'entraînement des modèles")
+            st.error("❌ Model training failed")
             return False
-            
     except Exception as e:
-        st.error(f"❌ Erreur lors de l'entraînement: {e}")
-        st.write("**Détails de l'erreur:**")
-        st.code(str(e))
-        
-        # Afficher des informations de débogage
-        st.write("**Informations de débogage:**")
-        st.write(f"- Colonnes disponibles: {list(data.columns)}")
-        st.write(f"- Nombre de lignes: {len(data)}")
-        st.write(f"- Types de colonnes: {dict(data.dtypes)}")
-        
+        st.error(f"❌ Error: {e}")
         return False
 
 def new_prediction_section(system):
-    st.header("🎯 Nouvelle Prédiction")
+    """Make new prediction"""
+    st.header("🎯 Make Prediction")
     
     if system.predictor is None:
-        st.warning("⚠️ Veuillez d'abord configurer le système de prédiction")
+        st.warning("⚠️ Configure prediction system first")
         return None
     
     col1, col2 = st.columns(2)
     
     with col1:
-        jour = st.selectbox(
-            "Jour de la semaine",
+        day = st.selectbox(
+            "Day of week",
             options=[1, 2, 3, 4, 5, 6, 7],
-            format_func=lambda x: ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'][x-1],
-            index=2  # Mercredi par défaut
+            format_func=lambda x: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][x-1],
+            index=2
         )
     
     with col2:
-        volume = st.number_input(
-            "Volume de production prévu",
-            min_value=1,
-            max_value=10000,
-            value=1200,
-            step=50
-        )
+        volume = st.number_input("Production volume", min_value=1, max_value=10000, value=1200, step=50)
     
-    if st.button("🔮 Faire la Prédiction", use_container_width=True):
-        with st.spinner("Calcul en cours..."):
-            prediction_result = system.make_prediction_for_planning(jour, volume)
+    if st.button("🔮 Make Prediction", use_container_width=True):
+        with st.spinner("Calculating..."):
+            prediction_result = system.make_prediction_for_planning(day, volume)
         
-        st.subheader("📊 Résultats de Prédiction")
+        st.subheader("📊 Prediction Results")
         
-        # Métriques principales
         pred_details = prediction_result['prediction_details']
-        taux_rework_nouveau = prediction_result['rework_rate_for_planning']
+        rework_rate = prediction_result['rework_rate_for_planning']
         
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            st.metric(
-                "Nouveau Taux Rework Chaîne",
-                f"{taux_rework_nouveau:.2f}%",
-                help="Calculé avec moyenne pondérée"
-            )
-        
+            st.metric("Rework Rate", f"{rework_rate:.2f}%")
         with col2:
-            defauts_predits = pred_details['predictions_chaine']['moyenne_ponderee']
-            st.metric("Défauts Prédits", f"{defauts_predits:.1f}")
-        
+            st.metric("Predicted Defects", f"{pred_details['predictions_chain']['weighted_average']:.1f}")
         with col3:
-            st.metric("Volume Analysé", f"{volume:,.0f}")
-        
+            st.metric("Volume", f"{volume:,.0f}")
         with col4:
-            jour_name = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'][jour-1]
-            st.metric("Jour Analysé", jour_name)
+            day_name = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][day-1]
+            st.metric("Day", day_name)
         
-        # DÉTAILS DES PRÉDICTIONS PAR POSTE - NOMS ORIGINAUX CONSERVÉS
-        st.subheader("🔍 Détails des Prédictions par Poste")
+        st.subheader("📈 Defects by Station")
         
-        prediction_details = []
-        for poste_nom_original, defauts_pred in pred_details['predictions_postes'].items():
-            taux_rework_poste = pred_details['taux_rework_postes'][poste_nom_original]
-            
-            # Récupérer le modèle utilisé pour ce poste - UTILISER LE NOM ORIGINAL
-            model_name = system.predictor.best_model_names.get(poste_nom_original, "Inconnu")
-            
-            # Récupérer l'importance des features si disponible - UTILISER LE NOM ORIGINAL
-            importance_info = ""
-            if poste_nom_original in system.predictor.feature_importances:
-                feat_imp = system.predictor.feature_importances[poste_nom_original]
-                importance_info = f"Volume: {feat_imp.iloc[0]['importance']:.3f}, Jour: {feat_imp.iloc[1]['importance']:.3f}"
-            
-            prediction_details.append({
-                'Poste': poste_nom_original,  # GARDER LE NOM EXACT ORIGINAL
-                'Modèle Optimal': model_name,
-                'Défauts Prédits': f"{defauts_pred:.1f}",
-                'Taux Rework': f"{taux_rework_poste:.2f}%",
-                'Importance Features': importance_info if importance_info else "N/A"
-            })
+        stations = list(pred_details['predictions_stations'].keys())
+        defects = list(pred_details['predictions_stations'].values())
         
-        df_predictions = pd.DataFrame(prediction_details)
-        st.dataframe(df_predictions, use_container_width=True)
-        
-        # Graphique de comparaison des prédictions par poste - NOMS ORIGINAUX
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            # Graphique des défauts prédits par poste - UTILISER LES NOMS ORIGINAUX
-            postes_originaux = list(pred_details['predictions_postes'].keys())
-            defauts_values = list(pred_details['predictions_postes'].values())
-            
-            fig_defauts = px.bar(
-                x=postes_originaux,  # NOMS ORIGINAUX DES POSTES
-                y=defauts_values,
-                title="Défauts Prédits par Poste",
-                labels={'x': 'Postes', 'y': 'Nombre de Défauts'},
-                color=defauts_values,
-                color_continuous_scale='reds'
-            )
-            st.plotly_chart(fig_defauts, use_container_width=True)
-        
-        with col2:
-            # Graphique des taux de rework par poste - UTILISER LES NOMS ORIGINAUX
-            taux_values = list(pred_details['taux_rework_postes'].values())
-            
-            fig_taux = px.bar(
-                x=postes_originaux,  # NOMS ORIGINAUX DES POSTES
-                y=taux_values,
-                title="Taux de Rework par Poste (%)",
-                labels={'x': 'Postes', 'y': 'Taux de Rework (%)'},
-                color=taux_values,
-                color_continuous_scale='oranges'
-            )
-            st.plotly_chart(fig_taux, use_container_width=True)
-        
-        # Comparaison des méthodes d'agrégation
-        st.subheader("⚖️ Comparaison des Méthodes d'Agrégation")
-        
-        aggregation_data = []
-        for method, taux in pred_details['taux_rework_chaine'].items():
-            defauts = pred_details['predictions_chaine'][method]
-            
-            method_names = {
-                'max': 'Maximum',
-                'moyenne': 'Moyenne Simple',
-                'moyenne_ponderee': 'Moyenne Pondérée (Recommandé)',
-                'somme': 'Somme'
-            }
-            
-            aggregation_data.append({
-                'Méthode': method_names.get(method, method),
-                'Défauts Totaux': f"{defauts:.1f}",
-                'Taux Rework Chaîne': f"{taux:.2f}%",
-                'Recommandé': "✅" if method == 'moyenne_ponderee' else ""
-            })
-        
-        df_aggregation = pd.DataFrame(aggregation_data)
-        st.dataframe(df_aggregation, use_container_width=True)
-        
-        # Affichage des poids utilisés pour la moyenne pondérée - NOMS ORIGINAUX
-        if system.predictor.poste_weights:
-            st.subheader("⚖️ Poids Utilisés pour la Moyenne Pondérée")
-            
-            weights_data = []
-            for poste_nom_original, poids in system.predictor.poste_weights.items():
-                weights_data.append({
-                    'Poste': poste_nom_original,  # GARDER LE NOM EXACT ORIGINAL
-                    'Poids': f"{poids:.4f}",
-                    'Pourcentage': f"{poids*100:.2f}%"
-                })
-            
-            df_weights = pd.DataFrame(weights_data)
-            st.dataframe(df_weights, use_container_width=True)
-            
-            # Graphique des poids - NOMS ORIGINAUX
-            fig_weights = px.pie(
-                df_weights,
-                values='Poids',
-                names='Poste',  # UTILISE LES NOMS ORIGINAUX
-                title="Distribution des Poids par Poste"
-            )
-            st.plotly_chart(fig_weights, use_container_width=True)
+        fig = px.bar(x=stations, y=defects, title="Predicted Defects by Station", color=defects, color_continuous_scale='reds')
+        st.plotly_chart(fig, use_container_width=True)
         
         return prediction_result
     
     return None
 
-def planning_section(system, prediction_result):
-    st.header("📋 Planification Stochastique Avancée")
-    
-    if prediction_result is None:
-        st.warning("⚠️ Veuillez d'abord faire une prédiction")
-        return None
-    
-    st.subheader("⚙️ Configuration de la Planification")
-    
-    # Paramètres de base
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        S = st.number_input("Nombre de scénarios", min_value=1, max_value=10, value=5)
-        T = st.number_input("Nombre de shifts", min_value=1, max_value=5, value=3)
-    
-    with col2:
-        mean_capacity = st.number_input("Capacité moyenne par shift", min_value=50, max_value=1000, value=160)
-        alpha_rework = st.slider("Taux de récupération rework", 0.0, 1.0, 0.8, 0.1)
-    
-    with col3:
-        beta = st.slider("Facteur capacité rework", 1.0, 2.0, 1.2, 0.1)
-        penalite = st.number_input("Pénalité pénurie", min_value=100, max_value=10000, value=1000)
-    
-    # NOUVEAUX PARAMÈTRES STOCHASTIQUES
-    st.subheader("🎲 Paramètres Stochastiques")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.write("**📊 Variations de Capacité**")
-        std_capacity = st.slider(
-            "Écart-type capacité", 
-            min_value=5.0, 
-            max_value=50.0, 
-            value=10.0, 
-            step=1.0,
-            help="Variation stochastique de la capacité entre scénarios"
-        )
-        
-        use_predicted_rework = st.checkbox(
-            "Utiliser taux rework prédit", 
-            value=True,
-            help="Utilise le taux prédit ou génère stochastiquement"
-        )
-        
-    with col2:
-        st.write("**🔄 Variations du Taux de Rework**")
-        
-        if not use_predicted_rework:
-            mean_defaut = st.slider(
-                "Taux défaut moyen", 
-                min_value=0.01, 
-                max_value=0.20, 
-                value=0.04, 
-                step=0.01,
-                help="Taux de défaut moyen pour génération stochastique"
-            )
-            
-            std_defaut = st.slider(
-                "Écart-type défaut", 
-                min_value=0.001, 
-                max_value=0.05, 
-                value=0.01, 
-                step=0.001,
-                help="Variation stochastique du taux de défaut"
-            )
-        else:
-            # Paramètres pour variation autour du taux prédit
-            rework_variation = st.slider(
-                "Variation autour du taux prédit (%)", 
-                min_value=0.0, 
-                max_value=50.0, 
-                value=10.0, 
-                step=5.0,
-                help="Pourcentage de variation autour du taux prédit"
-            )
-            
-            mean_defaut = prediction_result['rework_rate_for_planning'] / 100
-            std_defaut = mean_defaut * (rework_variation / 100)
-    
-    # Affichage des paramètres calculés
-    with st.expander("📈 Aperçu des Distributions Stochastiques"):
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.write("**Capacité:**")
-            st.write(f"- Moyenne: {mean_capacity}")
-            st.write(f"- Écart-type: {std_capacity}")
-            st.write(f"- Plage attendue: [{mean_capacity-2*std_capacity:.0f}, {mean_capacity+2*std_capacity:.0f}]")
-        
-        with col2:
-            st.write("**Taux de défaut:**")
-            st.write(f"- Moyenne: {mean_defaut*100:.2f}%")
-            st.write(f"- Écart-type: {std_defaut*100:.2f}%")
-            st.write(f"- Plage attendue: [{max(0,(mean_defaut-2*std_defaut)*100):.2f}%, {min(25,(mean_defaut+2*std_defaut)*100):.2f}%]")
-    
-    # Configuration des poids multicritères
-    st.subheader("⚖️ Poids Multicritères")
-    
-    col1, col2, col3, col4, col5 = st.columns(5)
-    
-    with col1:
-        poids_cout = st.slider("Poids Coût", 0.0, 1.0, 0.25, 0.05)
-    with col2:
-        poids_satisfaction = st.slider("Poids Satisfaction", 0.0, 1.0, 0.30, 0.05)
-    with col3:
-        poids_utilisation = st.slider("Poids Utilisation", 0.0, 1.0, 0.20, 0.05)
-    with col4:
-        poids_stabilite = st.slider("Poids Stabilité", 0.0, 1.0, 0.15, 0.05)
-    with col5:
-        poids_penuries = st.slider("Poids Pénuries", 0.0, 1.0, 0.10, 0.05)
-    
-    # Normalisation des poids
-    total_poids = poids_cout + poids_satisfaction + poids_utilisation + poids_stabilite + poids_penuries
-    if total_poids > 0:
-        poids_cout /= total_poids
-        poids_satisfaction /= total_poids
-        poids_utilisation /= total_poids
-        poids_stabilite /= total_poids
-        poids_penuries /= total_poids
-    
-    st.info(f"📊 Poids normalisés: Coût({poids_cout:.1%}), Satisfaction({poids_satisfaction:.1%}), Utilisation({poids_utilisation:.1%}), Stabilité({poids_stabilite:.1%}), Pénuries({poids_penuries:.1%})")
-    
-    # Configuration des demandes personnalisées
-    st.subheader("📦 Demandes Personnalisées")
-    
-    col1, col2 = st.columns([3, 1])
-    
-    with col1:
-        st.write("Modifiez les demandes pour chaque référence:")
-        
-        # Demandes par défaut
-        references = [f'REF_{i+1:02d}' for i in range(10)]
-        demandes_default = [20, 35, 45, 25, 40, 50, 22, 38, 30, 42]
-        
-        # Interface pour modifier les demandes
-        demandes_personnalisees = []
-        cols = st.columns(5)
-        
-        for i, (ref, demande_def) in enumerate(zip(references, demandes_default)):
-            with cols[i % 5]:
-                demande = st.number_input(
-                    ref,
-                    min_value=0,
-                    max_value=200,
-                    value=demande_def,
-                    key=f"demande_{ref}"
-                )
-                demandes_personnalisees.append(demande)
-    
-    with col2:
-        st.metric("Demande Totale", f"{sum(demandes_personnalisees):,.0f}")
-        
-        if st.button("🔄 Reset Demandes", use_container_width=True):
-            st.rerun()
-    
-    # Bouton de lancement
-    if st.button("🚀 Lancer la Planification Avancée", use_container_width=True):
-        with st.spinner("Optimisation stochastique en cours..."):
-            # Configuration du système de planification avec TOUS les paramètres
-            success_setup = system.setup_planning_system(
-                S=S, T=T,
-                mean_capacity=mean_capacity,
-                std_capacity=std_capacity,  # Nouveau paramètre
-                mean_defaut=mean_defaut,    # Nouveau paramètre
-                std_defaut=std_defaut,      # Nouveau paramètre
-                alpha_rework=alpha_rework,
-                beta=beta,
-                penalite_penurie=penalite,
-                demandes_personnalisees=demandes_personnalisees,
-                poids_cout=poids_cout,
-                poids_satisfaction=poids_satisfaction,
-                poids_utilisation=poids_utilisation,
-                poids_stabilite=poids_stabilite,
-                poids_penuries=poids_penuries,
-                use_predicted_rework=use_predicted_rework,  # Nouveau paramètre
-                predicted_rework_rate=prediction_result['rework_rate_for_planning'] if use_predicted_rework else None
-            )
-            
-            if success_setup:
-                # Exécution de la planification
-                success_planning = system.run_integrated_planning(time_limit=600)
-                
-                if success_planning:
-                    # Analyse des résultats
-                    results = system.analyze_integrated_results()
-                    
-                    if results:
-                        st.success("✅ Planification stochastique réussie!")
-                        
-                        # Affichage des paramètres utilisés
-                        st.subheader("📋 Paramètres Utilisés")
-                        col1, col2, col3 = st.columns(3)
-                        
-                        with col1:
-                            st.write("**Paramètres de base:**")
-                            st.write(f"- Scénarios: {S}")
-                            st.write(f"- Shifts: {T}")
-                            st.write(f"- Capacité moyenne: {mean_capacity}")
-                        
-                        with col2:
-                            st.write("**Paramètres stochastiques:**")
-                            st.write(f"- Écart-type capacité: {std_capacity}")
-                            if use_predicted_rework:
-                                st.write(f"- Taux rework prédit: {prediction_result['rework_rate_for_planning']:.2f}%")
-                                st.write(f"- Variation: ±{rework_variation}%")
-                            else:
-                                st.write(f"- Taux défaut moyen: {mean_defaut*100:.2f}%")
-                                st.write(f"- Écart-type défaut: {std_defaut*100:.2f}%")
-                        
-                        with col3:
-                            st.write("**Paramètres rework:**")
-                            st.write(f"- Alpha rework: {alpha_rework}")
-                            st.write(f"- Beta facteur: {beta}")
-                            st.write(f"- Pénalité: {penalite}")
-                        
-                        # Affichage immédiat des scénarios
-                        display_scenario_details_advanced(system)
-                        
-                        return results
-                    else:
-                        st.error("❌ Erreur lors de l'analyse des résultats")
-                else:
-                    st.error("❌ Échec de la planification - Pas de solution optimale")
-            else:
-                st.error("❌ Erreur de configuration")
-    
-    return None
-
-def display_scenario_details_advanced(system):
-    """Affiche les détails avancés de tous les scénarios avec analyse multicritères"""
-    st.subheader("🎯 Analyse Multicritères des Scénarios")
-    
-    if not hasattr(system.planner, 'scenario_analysis') or not system.planner.scenario_analysis:
-        st.error("❌ Aucune analyse de scénario disponible")
-        return
-    
-    scenario_analysis = system.planner.scenario_analysis
-    params = system.planner.parameters
-    
-    # Affichage des scores multicritères si disponibles
-    if hasattr(system.planner, 'multicriteria_scores') and system.planner.multicriteria_scores:
-        st.subheader("🏆 Scores Multicritères")
-        
-        # Tableau comparatif
-        comparison_data = []
-        global_scores = system.planner.multicriteria_scores['global_scores']
-        
-        for s in range(len(scenario_analysis)):
-            kpis = scenario_analysis[s]['kpis']
-            comparison_data.append({
-                'Scénario': f'S{s+1}',
-                'Score Global': f"{global_scores[s]:.3f}",
-                'Coût Total': f"{kpis['cout_total']:.0f}",
-                'Satisfaction (%)': f"{kpis['satisfaction_globale']:.1f}",
-                'Utilisation (%)': f"{kpis['utilisation_capacite']:.1f}",
-                'Stabilité': f"{kpis['stabilite']:.1f}",
-                'Pénuries': f"{kpis['total_penuries']:.1f}"
-            })
-        
-        df_comparison = pd.DataFrame(comparison_data)
-        st.dataframe(df_comparison, use_container_width=True)
-        
-        # Meilleur scénario
-        if hasattr(system.planner, 'best_scenario_selection') and system.planner.best_scenario_selection:
-            best_selection = system.planner.best_scenario_selection
-            best_scenario_id = best_selection['best_scenario_id']
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("🥇 Meilleur Scénario", f"S{best_scenario_id + 1}")
-            with col2:
-                st.metric("📊 Score Multicritères", f"{best_selection['best_score']:.3f}")
-            with col3:
-                st.metric("🛡️ Robustesse", best_selection['robustness'])
-    
-    # Tabs pour chaque scénario
-    tab_names = [f"Scénario {s+1}" for s in range(len(scenario_analysis))]
-    tabs = st.tabs(tab_names)
-    
-    for tab_idx, (s, scenario_data) in enumerate(scenario_analysis.items()):
-        with tabs[tab_idx]:
-            
-            # KPIs du scénario
-            kpis = scenario_data['kpis']
-            
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Satisfaction", f"{kpis['satisfaction_globale']:.1f}%")
-            with col2:
-                st.metric("Utilisation Capacité", f"{kpis['utilisation_capacite']:.1f}%")
-            with col3:
-                st.metric("Stabilité", f"{kpis['stabilite']:.1f}")
-            with col4:
-                st.metric("Coût Total", f"{kpis['cout_total']:,.0f}")
-            
-            # Détails par shift
-            st.write("### 📋 Plan d'Exécution par Shift")
-            
-            for t in range(params['T']):
-                shift_key = t + 1
-                if shift_key not in scenario_data['shifts_details']:
-                    st.error(f"Données manquantes pour le shift {shift_key} du scénario {s+1}")
-                    continue
-                    
-                shift_info = scenario_data['shifts_details'][shift_key]
-                
-                st.write(f"#### 🔄 Shift {t+1} - Scénario {s+1}")
-                
-                col1, col2 = st.columns([2, 1])
-                
-                with col1:
-                    # Ordre d'exécution
-                    ordre_execution = shift_info['execution_order']
-                    ordre_clean = [ref for ref in ordre_execution if ref != 'VIDE']
-                    
-                    if ordre_clean:
-                        st.write("**Ordre d'exécution:**")
-                        ordre_display = " → ".join(ordre_clean)
-                        st.markdown(f"`{ordre_display}`")
-                    else:
-                        st.write("**Aucune production programmée**")
-                    
-                    # Quantités détaillées
-                    if shift_info['quantities']:
-                        st.write("**Quantités à produire:**")
-                        
-                        # Créer un DataFrame pour l'affichage
-                        quantities_data = []
-                        for ref, qty in shift_info['quantities'].items():
-                            if qty > 0:
-                                taux_defaut = params['taux_defaut'][(s, ref)]
-                                prod_utile = qty * (1 - taux_defaut)
-                                prod_recuperee = qty * taux_defaut * params['alpha_rework']
-                                total_utile = prod_utile + prod_recuperee
-                                
-                                quantities_data.append({
-                                    'Référence': ref,
-                                    'Quantité Brute': f"{qty:.0f}",
-                                    'Production Utile': f"{total_utile:.0f}",
-                                    'Taux Défaut': f"{taux_defaut*100:.1f}%"
-                                })
-                        
-                        if quantities_data:
-                            df_quantities = pd.DataFrame(quantities_data)
-                            st.dataframe(df_quantities, hide_index=True, use_container_width=True)
-                
-                with col2:
-                    # Métriques du shift
-                    st.write("**Métriques du Shift:**")
-                    st.metric("Capacité Utilisée", 
-                             f"{shift_info['capacity_used']:.0f}/{shift_info['capacity_available']:.0f}")
-                    st.metric("Taux d'Utilisation", 
-                             f"{shift_info['capacity_utilization']:.1f}%")
-                    
-                    nb_refs_actives = len([ref for ref, qty in shift_info['quantities'].items() if qty > 0])
-                    st.metric("Références Actives", nb_refs_actives)
-                
-                st.markdown("---")
-            
-            # Résumé production par référence
-            st.write("### 📊 Résumé Production par Référence")
-            
-            production_summary = []
-            for ref, info in scenario_data['production_summary'].items():
-                production_summary.append({
-                    'Référence': ref,
-                    'Demande': f"{info['demande']:.0f}",
-                    'Production Brute': f"{info['production_brute']:.0f}",
-                    'Production Utile': f"{info['production_utile']:.0f}",
-                    'Pénurie': f"{info['penurie']:.0f}",
-                    'Taux Couverture': f"{info['taux_couverture']:.1f}%"
-                })
-            
-            df_production = pd.DataFrame(production_summary)
-            st.dataframe(df_production, hide_index=True, use_container_width=True)
-
-def dashboard_section_advanced(system, results):
-    st.header("📊 Dashboard Multicritères Avancé")
-    
-    if results is None:
-        st.warning("⚠️ Aucun résultat de planification disponible")
-        return
-    
-    if not system.planner or not hasattr(system.planner, 'scenario_analysis'):
-        st.error("❌ Données d'analyse manquantes")
-        return
-    
-    # Vérification du taux de rework intégré
-    st.subheader("🔗 Intégration Prédiction-Planification")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.metric("Taux Rework Prédit", f"{results['predicted_rework_rate']:.2f}%")
-    
-    with col2:
-        # Vérifier que le taux est bien utilisé dans la planification
-        taux_utilise = system.planner.parameters['taux_defaut'][(0, system.planner.parameters['R'][0])] * 100
-        st.metric("Taux Utilisé en Planification", f"{taux_utilise:.2f}%")
-    
-    with col3:
-        match = abs(results['predicted_rework_rate'] - taux_utilise) < 0.01
-        st.metric("Intégration", "✅ Réussie" if match else "❌ Échouée")
-    
-    # Analyse multicritères
-    if 'multicriteria_scores' in results and results['multicriteria_scores']:
-        st.subheader("🏆 Analyse Multicritères")
-        
-        scores = results['multicriteria_scores']
-        scenario_analysis = results['scenario_analysis']
-        
-        # Graphique radar des critères
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            # Tableau des scores
-            comparison_data = []
-            for s in range(len(scenario_analysis)):
-                kpis = scenario_analysis[s]['kpis']
-                global_score = scores['global_scores'][s]
-                
-                comparison_data.append({
-                    'Scénario': f'S{s+1}',
-                    'Score Global': f"{global_score:.3f}",
-                    'Satisfaction': f"{kpis['satisfaction_globale']:.1f}%",
-                    'Utilisation': f"{kpis['utilisation_capacite']:.1f}%",
-                    'Coût': f"{kpis['cout_total']:,.0f}",
-                    'Stabilité': f"{kpis['stabilite']:.1f}",
-                    'Pénuries': f"{kpis['total_penuries']:.1f}"
-                })
-            
-            df_scores = pd.DataFrame(comparison_data)
-            st.dataframe(df_scores, use_container_width=True)
-        
-        with col2:
-            # Graphique des scores globaux
-            scenarios = [f'S{s+1}' for s in range(len(scenario_analysis))]
-            global_scores_values = list(scores['global_scores'].values())
-            
-            fig = px.bar(
-                x=scenarios, 
-                y=global_scores_values,
-                title="Scores Multicritères par Scénario",
-                labels={'x': 'Scénarios', 'y': 'Score Global'}
-            )
-            
-            # Colorer le meilleur en or
-            colors = ['gold' if score == max(global_scores_values) else 'lightblue' 
-                     for score in global_scores_values]
-            fig.update_traces(marker_color=colors)
-            
-            st.plotly_chart(fig, use_container_width=True)
-        
-        # Meilleur scénario recommandé
-        if 'best_scenario_selection' in results and results['best_scenario_selection']:
-            best_selection = results['best_scenario_selection']
-            
-            st.subheader("🥇 Scénario Recommandé")
-            
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                st.metric("Meilleur Scénario", f"S{best_selection['best_scenario_id'] + 1}")
-            
-            with col2:
-                st.metric("Score Multicritères", f"{best_selection['best_score']:.3f}")
-            
-            with col3:
-                st.metric("Écart avec 2ème", f"{best_selection['gap_with_second']:.3f}")
-            
-            with col4:
-                st.metric("Robustesse", best_selection['robustness'])
-            
-            # Plan d'exécution recommandé
-            best_id = best_selection['best_scenario_id']
-            best_scenario_data = scenario_analysis[best_id]
-            
-            st.write("### 📋 Plan d'Exécution Recommandé")
-            
-            for t in range(system.planner.parameters['T']):
-                shift_key = t + 1
-                if shift_key in best_scenario_data['shifts_details']:
-                    shift_info = best_scenario_data['shifts_details'][shift_key]
-                    ordre = ' → '.join([ref for ref in shift_info['execution_order'] if ref != 'VIDE'])
-                    
-                    col1, col2 = st.columns([3, 1])
-                    with col1:
-                        st.write(f"**Shift {t+1}:** {ordre}")
-                    with col2:
-                        st.write(f"Util: {shift_info['capacity_utilization']:.1f}%")
-
-def export_section_advanced(system, results):
-    st.header("📁 Export des Résultats Avancés")
-    
-    if results is None:
-        st.warning("⚠️ Aucun résultat à exporter")
-        return
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        if st.button("📊 Exporter vers Excel Complet", use_container_width=True):
-            try:
-                # Créer un buffer en mémoire
-                output = io.BytesIO()
-                
-                with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    # 1. Résumé intégré avec prédiction
-                    summary_data = [{
-                        'Taux_Rework_Predit_Pct': results['predicted_rework_rate'],
-                        'Cout_Total_Optimal': results['planning_results']['cout_total'],
-                        'Nombre_Scenarios': len(results['scenario_analysis']),
-                        'Timestamp': pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')
-                    }]
-                    
-                    df_summary = pd.DataFrame(summary_data)
-                    df_summary.to_excel(writer, sheet_name='Resume_Integration', index=False)
-                    
-                    # 2. Scores multicritères si disponibles
-                    if 'multicriteria_scores' in results:
-                        scores_data = []
-                        for s in range(len(results['scenario_analysis'])):
-                            scores_data.append({
-                                'Scenario': f'S{s+1}',
-                                'Score_Global': results['multicriteria_scores']['global_scores'][s],
-                                'Score_Cout_Norm': results['multicriteria_scores']['normalized_criteria']['cout'][s],
-                                'Score_Satisfaction_Norm': results['multicriteria_scores']['normalized_criteria']['satisfaction'][s],
-                                'Score_Utilisation_Norm': results['multicriteria_scores']['normalized_criteria']['utilisation'][s],
-                                'Score_Stabilite_Norm': results['multicriteria_scores']['normalized_criteria']['stabilite'][s],
-                                'Score_Penuries_Norm': results['multicriteria_scores']['normalized_criteria']['penuries'][s]
-                            })
-                        
-                        df_scores = pd.DataFrame(scores_data)
-                        df_scores.to_excel(writer, sheet_name='Scores_Multicriteres', index=False)
-                    
-                    # 3. Comparaison des scénarios détaillée
-                    planning_comparison = []
-                    for s, data in results['scenario_analysis'].items():
-                        kpis = data['kpis']
-                        planning_comparison.append({
-                            'Scenario': f'S{s+1}',
-                            'Satisfaction_Pct': kpis['satisfaction_globale'],
-                            'Utilisation_Capacite_Pct': kpis['utilisation_capacite'],
-                            'Stabilite': kpis['stabilite'],
-                            'Total_Penuries': kpis['total_penuries'],
-                            'Cout_Total': kpis['cout_total'],
-                            'Cout_Production': kpis['cout_production'],
-                            'Cout_Penuries': kpis['cout_penuries'],
-                            'Efficacite_Production': kpis['efficacite_production']
-                        })
-                    
-                    df_planning = pd.DataFrame(planning_comparison)
-                    df_planning.to_excel(writer, sheet_name='Comparaison_Scenarios', index=False)
-                    
-                    # 4. Production détaillée par scénario
-                    if hasattr(system.planner, 'results'):
-                        prod_data = []
-                        for s in range(len(results['scenario_analysis'])):
-                            for ref in system.planner.parameters['R']:
-                                for t in range(system.planner.parameters['T']):
-                                    qty = system.planner.results['production'][(s, ref, t)]
-                                    if qty > 0:
-                                        prod_data.append({
-                                            'Scenario': f'S{s+1}',
-                                            'Reference': ref,
-                                            'Shift': f'T{t+1}',
-                                            'Quantite': qty,
-                                            'Taux_Rework_Utilise': system.planner.parameters['taux_defaut'][(s, ref)] * 100
-                                        })
-                        
-                        if prod_data:
-                            df_prod = pd.DataFrame(prod_data)
-                            df_prod.to_excel(writer, sheet_name='Production_Details', index=False)
-                    
-                    # 5. Meilleur scénario si disponible
-                    if 'best_scenario_selection' in results:
-                        best_data = [{
-                            'Meilleur_Scenario': f"S{results['best_scenario_selection']['best_scenario_id'] + 1}",
-                            'Score_Multicriteres': results['best_scenario_selection']['best_score'],
-                            'Robustesse': results['best_scenario_selection']['robustness'],
-                            'Ecart_2eme': results['best_scenario_selection']['gap_with_second']
-                        }]
-                        
-                        df_best = pd.DataFrame(best_data)
-                        df_best.to_excel(writer, sheet_name='Meilleur_Scenario', index=False)
-                
-                # Préparer le téléchargement
-                processed_data = output.getvalue()
-                
-                st.download_button(
-                    label="⬇️ Télécharger Excel Complet",
-                    data=processed_data,
-                    file_name=f"resultats_integres_avances_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-                
-                st.success("✅ Fichier Excel avancé généré!")
-                
-            except Exception as e:
-                st.error(f"❌ Erreur lors de l'export: {e}")
-    
-    with col2:
-        if st.button("📊 Export Visualisations", use_container_width=True):
-            st.info("🚧 Export des graphiques en développement")
-
-# Application principale
 def main():
     create_header()
     
-    # Initialisation du système dans la session
     if 'system' not in st.session_state:
         st.session_state.system = IntegratedPredictionPlanningSystem()
-    
     if 'data' not in st.session_state:
         st.session_state.data = None
-    
     if 'prediction_trained' not in st.session_state:
         st.session_state.prediction_trained = False
-    
     if 'prediction_result' not in st.session_state:
         st.session_state.prediction_result = None
     
-    if 'planning_results' not in st.session_state:
-        st.session_state.planning_results = None
-    
-    # Sidebar pour navigation
     with st.sidebar:
         st.header("🧭 Navigation")
         
-        step = st.radio(
-            "Choisissez une étape:",
-            [
-                "📊 1. Chargement des Données",
-                "🔮 2. Prédiction de Défauts",
-                "🎯 3. Nouvelle Prédiction",
-                "📋 4. Planification Avancée",
-                "📈 5. Dashboard Multicritères",
-                "📁 6. Export Avancé"
-            ]
-        )
+        step = st.radio("Choose a step:", ["📊 1. Load Data", "🔮 2. Train Prediction", "🎯 3. Make Prediction"])
         
         st.markdown("---")
-        
-        # État du processus
-        st.header("📋 État du Processus")
+        st.header("📋 Process Status")
         
         if st.session_state.data is not None:
-            st.success("✅ Données chargées")
+            st.success("✅ Data loaded")
         else:
-            st.error("❌ Données non chargées")
+            st.error("❌ No data")
         
         if st.session_state.prediction_trained:
-            st.success("✅ Modèles entraînés")
+            st.success("✅ Models trained")
         else:
-            st.error("❌ Modèles non entraînés")
+            st.error("❌ Not trained")
         
         if st.session_state.prediction_result is not None:
-            st.success("✅ Prédiction effectuée")
+            st.success("✅ Prediction done")
         else:
-            st.error("❌ Pas de prédiction")
+            st.error("❌ No prediction")
         
-        if st.session_state.planning_results is not None:
-            st.success("✅ Planification terminée")
-        else:
-            st.error("❌ Planification non effectuée")
-        
-        st.markdown("---")
-        
-        # Bouton de reset
-        if st.button("🔄 Recommencer", use_container_width=True):
-            for key in ['system', 'data', 'prediction_trained', 'prediction_result', 'planning_results']:
-                if key in st.session_state:
-                    del st.session_state[key]
+        if st.button("🔄 Restart", use_container_width=True):
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
             st.rerun()
-        
-        # Informations système
-        st.markdown("---")
-        st.header("ℹ️ Informations")
-        st.markdown("""
-        **Système Intégré Avancé v2.0**
-        
-        🔮 **Prédiction:** Modèles ML pour prédire les défauts
-        
-        📋 **Planification:** Optimisation stochastique multicritères
-        
-        📊 **Dashboard:** Analyse multicritères avancée
-        
-        ⚖️ **Fonctionnalités:**
-        - Poids multicritères configurables
-        - Analyse de robustesse
-        - Score global pondéré
-        - Export complet
-        - **Conservation stricte des noms de postes originaux**
-        - **Traitement uniforme des données Excel et démo**
-        - **Identification flexible des colonnes**
-        """)
     
-    # Contenu principal selon l'étape sélectionnée
-    if step == "📊 1. Chargement des Données":
+    if step == "📊 1. Load Data":
         data = load_data_section()
         if data is not None:
             st.session_state.data = data
-            # Reset des étapes suivantes si nouvelles données
-            st.session_state.prediction_trained = False
-            st.session_state.prediction_result = None
-            st.session_state.planning_results = None
-    
-    elif step == "🔮 2. Prédiction de Défauts":
+    elif step == "🔮 2. Train Prediction":
         if st.session_state.data is not None:
             success = prediction_section(st.session_state.system, st.session_state.data)
             if success:
                 st.session_state.prediction_trained = True
         else:
-            st.warning("⚠️ Veuillez d'abord charger des données à l'étape 1")
-    
-    elif step == "🎯 3. Nouvelle Prédiction":
+            st.warning("⚠️ Load data first")
+    elif step == "🎯 3. Make Prediction":
         if st.session_state.prediction_trained:
             prediction_result = new_prediction_section(st.session_state.system)
             if prediction_result is not None:
                 st.session_state.prediction_result = prediction_result
-                # Reset de la planification si nouvelle prédiction
-                st.session_state.planning_results = None
         else:
-            st.warning("⚠️ Veuillez d'abord entraîner les modèles à l'étape 2")
+            st.warning("⚠️ Train models first")
     
-    elif step == "📋 4. Planification Avancée":
-        if st.session_state.prediction_result is not None:
-            planning_results = planning_section(st.session_state.system, st.session_state.prediction_result)
-            if planning_results is not None:
-                st.session_state.planning_results = planning_results
-        else:
-            st.warning("⚠️ Veuillez d'abord effectuer une prédiction à l'étape 3")
-    
-    elif step == "📈 5. Dashboard Multicritères":
-        if st.session_state.planning_results is not None:
-            dashboard_section_advanced(st.session_state.system, st.session_state.planning_results)
-        else:
-            st.warning("⚠️ Veuillez d'abord effectuer la planification à l'étape 4")
-    
-    elif step == "📁 6. Export Avancé":
-        if st.session_state.planning_results is not None:
-            export_section_advanced(st.session_state.system, st.session_state.planning_results)
-        else:
-            st.warning("⚠️ Aucun résultat à exporter")
-    
-    # Footer avec logos en bas de page
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #666; padding: 20px;'>
-        <div style='display: flex; justify-content: center; align-items: center; gap: 40px; margin-bottom: 15px;'>
-            <div style='display: flex; align-items: center; gap: 10px;'>
-                <span style='font-size: 24px;'>🏭</span>
-                <span style='font-weight: bold; color: #1f4e79;'>YAZAKI</span>
-            </div>
-            <div style='color: #ccc; font-size: 20px;'>×</div>
-            <div style='display: flex; align-items: center; gap: 10px;'>
-                <span style='font-size: 24px;'>🎓</span>
-                <span style='font-weight: bold; color: #2e86ab;'>ENSAM</span>
-            </div>
-        </div>
         <div style='color: #666; margin-top: 8px; font-size: 14px; font-style: italic;'>
-            🏭 Système Intégré Avancé Prédiction-Planification Stochastique | 
-            Développé avec ❤️ en Streamlit | 
-            Modèle v2.0 - Conservation Stricte des Noms Originaux | 
-            © 2024
+            Advanced Prediction-Planning System | v1.0 | © 2024
         </div>
     </div>
     """, unsafe_allow_html=True)
 
-# Point d'entrée
 if __name__ == "__main__":
     main()
+          
+    
+ 
