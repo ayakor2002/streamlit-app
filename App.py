@@ -18,7 +18,6 @@ from typing import Dict, List, Tuple, Any
 import warnings
 warnings.filterwarnings('ignore')
 
-# Streamlit page configuration
 st.set_page_config(
     page_title="Advanced Prediction-Planning System",
     page_icon="🏭",
@@ -26,7 +25,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS
 st.markdown("""
 <style>
     .main-header {
@@ -63,7 +61,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-class MultiPosteDefectPredictor:
+class MultiStationDefectPredictor:
     def __init__(self):
         self.models = {}
         self.transformers = {}
@@ -166,7 +164,7 @@ class MultiPosteDefectPredictor:
                 break
 
         if not day_col or not volume_col:
-            raise ValueError(f"'Day' and 'Volume' columns required!")
+            raise ValueError("'Day' and 'Volume' columns required!")
 
         self.day_col = day_col
         self.volume_col = volume_col
@@ -226,7 +224,11 @@ class MultiPosteDefectPredictor:
         all_results = {}
 
         for name, model in models.items():
-            search = GridSearchCV(model, param_grids[name], cv=TimeSeriesSplit(n_splits=5), scoring='neg_mean_squared_error', n_jobs=-1) if search_method == 'grid' else RandomizedSearchCV(model, param_grids[name], n_iter=n_iter, cv=TimeSeriesSplit(n_splits=5), scoring='neg_mean_squared_error', random_state=42, n_jobs=-1)
+            if search_method == 'grid':
+                search = GridSearchCV(model, param_grids[name], cv=TimeSeriesSplit(n_splits=5), scoring='neg_mean_squared_error', n_jobs=-1)
+            else:
+                search = RandomizedSearchCV(model, param_grids[name], n_iter=n_iter, cv=TimeSeriesSplit(n_splits=5), scoring='neg_mean_squared_error', random_state=42, n_jobs=-1)
+            
             search.fit(X_train, y_train)
             y_pred_test = search.predict(X_test)
             mse = mean_squared_error(y_test, y_pred_test)
@@ -288,7 +290,7 @@ class MultiPosteDefectPredictor:
         rework_rate_stations = {station: (defects / volume) * 100 for station, defects in predictions_stations.items()}
         rework_rate_chain = {method: (defects / volume) * 100 for method, defects in predictions_chain.items()}
 
-        return {
+        prediction_record = {
             'day': day,
             'volume': volume,
             'predictions_stations': predictions_stations,
@@ -296,277 +298,356 @@ class MultiPosteDefectPredictor:
             'rework_rate_stations': rework_rate_stations,
             'rework_rate_chain': rework_rate_chain
         }
+        self.predictions_history.append(prediction_record)
 
-class IntegratedPredictionPlanningSystem:
+        return prediction_record
+
+class StochasticPlanningModel:
+    """Advanced stochastic planning model with multicriteria analysis"""
+
     def __init__(self):
-        self.predictor = None
+        self.model = None
+        self.variables = {}
+        self.results = {}
+        self.parameters = {}
+        self.scenario_analysis = {}
+        self.multicriteria_scores = {}
+        self.best_scenario_selection = {}
         self.predicted_rework_rate = None
 
-    def setup_prediction_system(self, data):
-        self.predictor = MultiPosteDefectPredictor()
-        self.predictor.original_data = data.copy()
-        results, stations = self.predictor.train_all_stations(data, search_method='grid')
-        return results, stations
+    def set_parameters(self,
+                      S: int = 5,
+                      T: int = 3,
+                      R: List[str] = None,
+                      EDI: List = None,
+                      p: List[List] = None,
+                      D: List[List] = None,
+                      mean_capacity: float = 160,
+                      std_capacity: float = 10,
+                      mean_defect: float = 0.04,
+                      std_defect: float = 0.01,
+                      m: int = 5,
+                      alpha_rework: float = 0.8,
+                      beta: float = 1.2,
+                      shortage_penalty: float = 1000,
+                      cost_weight: float = 0.25,
+                      satisfaction_weight: float = 0.30,
+                      utilization_weight: float = 0.20,
+                      stability_weight: float = 0.15,
+                      shortage_weight: float = 0.10,
+                      use_predicted_rework: bool = False,
+                      predicted_rework_rate: float = None):
+        """Complete model configuration"""
 
-    def make_prediction_for_planning(self, day, volume, method='weighted_average'):
-        if self.predictor is None:
-            raise ValueError("Prediction system must be configured first!")
+        if R is None:
+            R = [f'REF_{i+1:02d}' for i in range(10)]
 
-        prediction_result = self.predictor.predict_single_scenario(day, volume)
-        rework_rate_chain = prediction_result['rework_rate_chain'][method]
-        self.predicted_rework_rate = rework_rate_chain
+        if EDI is None:
+            EDI = [20, 35, 45, 25, 40, 50, 22, 38, 30, 42]
 
-        return {
-            'prediction_details': prediction_result,
-            'rework_rate_for_planning': rework_rate_chain,
-            'method_used': method
+        if isinstance(EDI, list):
+            EDI_dict = {R[i]: EDI[i] for i in range(min(len(R), len(EDI)))}
+        else:
+            EDI_dict = EDI
+
+        if p is None:
+            p = [[0, 0.20, 0.30, 0.15, 0.25, 0.35, 0.12, 0.22, 0.32, 0.18],
+                 [0.20, 0, 0.40, 0.25, 0.35, 0.45, 0.22, 0.32, 0.42, 0.28],
+                 [0.30, 0.40, 0, 0.35, 0.45, 0.55, 0.32, 0.42, 0.52, 0.38],
+                 [0.15, 0.25, 0.35, 0, 0.30, 0.40, 0.17, 0.27, 0.37, 0.23],
+                 [0.25, 0.35, 0.45, 0.30, 0, 0.50, 0.27, 0.37, 0.47, 0.33],
+                 [0.35, 0.45, 0.55, 0.40, 0.50, 0, 0.37, 0.47, 0.57, 0.43],
+                 [0.12, 0.22, 0.32, 0.17, 0.27, 0.37, 0, 0.24, 0.34, 0.20],
+                 [0.22, 0.32, 0.42, 0.27, 0.37, 0.47, 0.24, 0, 0.44, 0.30],
+                 [0.32, 0.42, 0.52, 0.37, 0.47, 0.57, 0.34, 0.44, 0, 0.40],
+                 [0.18, 0.28, 0.38, 0.23, 0.33, 0.43, 0.20, 0.30, 0.40, 0]]
+
+        if D is None:
+            D = [[1.0, 0.2, 0.4, 0.3, 0.1, 0.5, 0.2, 0.3, 0.4, 0.1],
+                 [0.2, 1.0, 0.6, 0.4, 0.3, 0.2, 0.5, 0.4, 0.3, 0.6],
+                 [0.4, 0.6, 1.0, 0.5, 0.4, 0.3, 0.6, 0.5, 0.2, 0.7],
+                 [0.3, 0.4, 0.5, 1.0, 0.6, 0.4, 0.3, 0.7, 0.5, 0.4],
+                 [0.1, 0.3, 0.4, 0.6, 1.0, 0.5, 0.4, 0.6, 0.7, 0.3],
+                 [0.5, 0.2, 0.3, 0.4, 0.5, 1.0, 0.3, 0.2, 0.4, 0.6],
+                 [0.2, 0.5, 0.6, 0.3, 0.4, 0.3, 1.0, 0.5, 0.3, 0.7],
+                 [0.3, 0.4, 0.5, 0.7, 0.6, 0.2, 0.5, 1.0, 0.4, 0.5],
+                 [0.4, 0.3, 0.2, 0.5, 0.7, 0.4, 0.3, 0.4, 1.0, 0.6],
+                 [0.1, 0.6, 0.7, 0.4, 0.3, 0.6, 0.7, 0.5, 0.6, 1.0]]
+
+        p_dict = {}
+        for i in range(len(R)):
+            for j in range(len(R)):
+                p_dict[(R[i], j)] = p[i][j]
+
+        D_array = np.array(D)
+
+        np.random.seed(42)
+        
+        CAPchaine = {}
+        for s in range(S):
+            for t in range(T):
+                capacite = max(50, np.random.normal(mean_capacity, std_capacity))
+                CAPchaine[(s, t)] = capacite
+        
+        defect_rate = {}
+        
+        if use_predicted_rework and predicted_rework_rate is not None:
+            base_rate = predicted_rework_rate / 100
+            self.predicted_rework_rate = predicted_rework_rate
+            
+            for s in range(S):
+                for i in R:
+                    defaut = max(0.001, min(0.25, np.random.normal(base_rate, std_defect)))
+                    defect_rate[(s, i)] = defaut
+        else:
+            for s in range(S):
+                for i in R:
+                    defaut = max(0.001, min(0.25, np.random.normal(mean_defect, std_defect)))
+                    defect_rate[(s, i)] = defaut
+
+        self.parameters = {
+            'S': S, 'T': T, 'R': R, 'EDI': EDI_dict, 'p': p_dict, 'D': D_array,
+            'CAPchaine': CAPchaine, 'm': m, 'defect_rate': defect_rate,
+            'alpha_rework': alpha_rework, 'beta': beta, 'shortage_penalty': shortage_penalty,
+            'mean_capacity': mean_capacity, 'std_capacity': std_capacity,
+            'mean_defect': mean_defect, 'std_defect': std_defect,
+            'cost_weight': cost_weight, 'satisfaction_weight': satisfaction_weight,
+            'utilization_weight': utilization_weight, 'stability_weight': stability_weight,
+            'shortage_weight': shortage_weight,
+            'use_predicted_rework': use_predicted_rework,
+            'predicted_rework_rate': predicted_rework_rate
         }
 
-def create_header():
-    """Create header"""
-    st.markdown("""
-    <div class="main-header">
-        <h1>🏭 Advanced Prediction-Planning Integration System</h1>
-        <p>Defect Prediction & Multicriteria Stochastic Planning</p>
-    </div>
-    """, unsafe_allow_html=True)
+    def create_model(self):
+        """Create optimization model"""
+        params = self.parameters
+        S, T, R = params['S'], params['T'], params['R']
 
-def load_data_section():
-    """Load data section"""
-    st.header("📊 Load Data")
-    
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        uploaded_file = st.file_uploader(
-            "Upload your Excel file with historical data",
-            type=['xlsx', 'xls'],
-            help="File must contain: Day, Volume_production, and defect columns per station"
+        self.model = plp.LpProblem("Stochastic_Planning", plp.LpMinimize)
+
+        self.variables['x'] = plp.LpVariable.dicts(
+            "x",
+            [(i, j, s, t) for i in R for j in range(len(R)) for s in range(S) for t in range(T)],
+            cat='Binary'
         )
-    
-    with col2:
-        if st.button("📝 Use Demo Data", use_container_width=True):
-            with st.spinner("Generating demo data..."):
-                demo_data = create_demo_data()
-                st.success(f"✅ Demo data generated: {len(demo_data)} rows")
-                display_data_info(demo_data)
-                return demo_data
-    
-    if uploaded_file is not None:
+
+        self.variables['q'] = plp.LpVariable.dicts(
+            "q",
+            [(s, i, t) for s in range(S) for i in R for t in range(T)],
+            lowBound=0,
+            cat='Continuous'
+        )
+
+        self.variables['shortage'] = plp.LpVariable.dicts(
+            "shortage",
+            [(s, i) for s in range(S) for i in R],
+            lowBound=0,
+            cat='Continuous'
+        )
+
+    def add_constraints(self):
+        """Add model constraints"""
+        params = self.parameters
+        S, T, R = params['S'], params['T'], params['R']
+        x, q, shortage = self.variables['x'], self.variables['q'], self.variables['shortage']
+
+        for s in range(S):
+            for i in R:
+                demand_satisfied = plp.lpSum([
+                    q[(s, i, t)] * (1 - params['defect_rate'][(s, i)]) +
+                    params['alpha_rework'] * q[(s, i, t)] * params['defect_rate'][(s, i)]
+                    for t in range(T)
+                ])
+                self.model += (
+                    demand_satisfied + shortage[(s, i)] >= params['EDI'][i],
+                    f"Demand_s{s}_i{i}"
+                )
+
+        for s in range(S):
+            for t in range(T):
+                capacity_used = plp.lpSum([
+                    q[(s, i, t)] * (1 + params['beta'] * params['defect_rate'][(s, i)])
+                    for i in R
+                ])
+                self.model += (
+                    capacity_used <= params['CAPchaine'][(s, t)],
+                    f"Capacity_s{s}_t{t}"
+                )
+
+        for s in range(S):
+            for t in range(T):
+                for j in range(len(R)):
+                    self.model += (
+                        plp.lpSum([x[(i, j, s, t)] for i in R]) == 1,
+                        f"Position_s{s}_t{t}_j{j}"
+                    )
+                
+                for i in R:
+                    self.model += (
+                        plp.lpSum([x[(i, j, s, t)] for j in range(len(R))]) <= 1,
+                        f"Reference_s{s}_t{t}_i{i}"
+                    )
+
+        for s in range(S):
+            for i in R:
+                for t in range(T):
+                    defect_rate_si = params['defect_rate'][(s, i)]
+                    if defect_rate_si < 0.99:
+                        production_required = params['m'] / (1 - defect_rate_si + params['alpha_rework'] * defect_rate_si)
+                    else:
+                        production_required = params['m'] * 2
+                    
+                    self.model += (
+                        q[(s, i, t)] >= production_required * plp.lpSum([x[(i, j, s, t)] for j in range(len(R))]),
+                        f"Production_min_s{s}_i{i}_t{t}"
+                    )
+
+    def set_objective(self):
+        """Define objective function"""
+        params = self.parameters
+        S, T, R = params['S'], params['T'], params['R']
+        q, shortage = self.variables['q'], self.variables['shortage']
+
+        production_cost = plp.lpSum([
+            20 * q[(s, i, t)]
+            for s in range(S) for i in R for t in range(T)
+        ])
+
+        shortage_cost = plp.lpSum([
+            params['shortage_penalty'] * shortage[(s, i)]
+            for s in range(S) for i in R
+        ])
+
+        self.model += production_cost + shortage_cost
+
+    def solve_model(self, solver_name='PULP_CBC_CMD', time_limit=300):
+        """Solve the model"""
         try:
-            data = pd.read_excel(uploaded_file)
-            st.success(f"✅ Data loaded: {len(data)} rows, {len(data.columns)} columns")
-            display_data_info(data)
-            return data
+            if solver_name == 'PULP_CBC_CMD':
+                solver = plp.PULP_CBC_CMD(timeLimit=time_limit, msg=0)
+            else:
+                solver = plp.getSolver(solver_name)
+
+            self.model.solve(solver)
+
+            if self.model.status == plp.LpStatusOptimal:
+                self._extract_results()
+                return True
+            else:
+                return False
+
         except Exception as e:
-            st.error(f"❌ Error loading: {e}")
-            return None
-    
-    return None
-
-def display_data_info(data):
-    """Display data information"""
-    with st.expander("👀 Data Preview", expanded=True):
-        col1, col2 = st.columns([2, 1])
-        
-        with col1:
-            st.write("**First rows:**")
-            st.dataframe(data.head(10), use_container_width=True)
-        
-        with col2:
-            st.write("**Statistics:**")
-            numeric_cols = data.select_dtypes(include=[np.number]).columns
-            if len(numeric_cols) > 0:
-                st.dataframe(data[numeric_cols].describe().round(2))
-
-def create_demo_data(n_days=100):
-    """Create demo data"""
-    np.random.seed(42)
-    days = range(1, n_days + 1)
-    data = []
-
-    for day in days:
-        day_of_week = ((day - 1) % 7) + 1
-        volume_base = 800 if day_of_week in [6, 7] else 1200
-        volume = volume_base + np.random.normal(0, 100)
-        volume = max(volume, 100)
-
-        defects_1 = max(0, volume * 0.02 + day_of_week * 0.5 + np.random.normal(0, 2))
-        defects_2 = max(0, volume * 0.015 + day_of_week * 0.3 + np.random.normal(0, 1.5))
-        defects_3 = max(0, volume * 0.025 + day_of_week * 0.4 + np.random.normal(0, 2.5))
-
-        data.append({
-            'Day': day_of_week,
-            'Production_Volume': volume,
-            'Station1_Defects': defects_1,
-            'Station2_Defects': defects_2,
-            'Station3_Defects': defects_3
-        })
-
-    return pd.DataFrame(data)
-
-def prediction_section(system, data):
-    """Prediction section"""
-    st.header("🔮 Defect Prediction")
-    
-    if data is None:
-        st.warning("⚠️ Please load data first")
-        return False
-    
-    try:
-        with st.spinner("🧠 Training prediction models..."):
-            results, stations = system.setup_prediction_system(data)
-        
-        if results and stations:
-            st.success("✅ Models trained successfully!")
-            
-            st.subheader("🏆 Optimal Models Selected")
-            
-            model_data = []
-            for station in stations:
-                if station in results:
-                    result = results[station]
-                    model_data.append({
-                        'Station': station,
-                        'Optimal Model': result['model_name'],
-                        'MSE': f"{result['mse']:.4f}",
-                        'MAE': f"{result['mae']:.4f}",
-                        'R²': f"{result['r2']:.4f}"
-                    })
-            
-            st.dataframe(pd.DataFrame(model_data), use_container_width=True)
-            return True
-        else:
-            st.error("❌ Model training failed")
+            st.error(f"Error during solving: {e}")
             return False
-    except Exception as e:
-        st.error(f"❌ Error: {e}")
-        return False
 
-def new_prediction_section(system):
-    """Make new prediction"""
-    st.header("🎯 Make Prediction")
-    
-    if system.predictor is None:
-        st.warning("⚠️ Configure prediction system first")
-        return None
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        day = st.selectbox(
-            "Day of week",
-            options=[1, 2, 3, 4, 5, 6, 7],
-            format_func=lambda x: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][x-1],
-            index=2
-        )
-    
-    with col2:
-        volume = st.number_input("Production volume", min_value=1, max_value=10000, value=1200, step=50)
-    
-    if st.button("🔮 Make Prediction", use_container_width=True):
-        with st.spinner("Calculating..."):
-            prediction_result = system.make_prediction_for_planning(day, volume)
-        
-        st.subheader("📊 Prediction Results")
-        
-        pred_details = prediction_result['prediction_details']
-        rework_rate = prediction_result['rework_rate_for_planning']
-        
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.metric("Rework Rate", f"{rework_rate:.2f}%")
-        with col2:
-            st.metric("Predicted Defects", f"{pred_details['predictions_chain']['weighted_average']:.1f}")
-        with col3:
-            st.metric("Volume", f"{volume:,.0f}")
-        with col4:
-            day_name = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][day-1]
-            st.metric("Day", day_name)
-        
-        st.subheader("📈 Defects by Station")
-        
-        stations = list(pred_details['predictions_stations'].keys())
-        defects = list(pred_details['predictions_stations'].values())
-        
-        fig = px.bar(x=stations, y=defects, title="Predicted Defects by Station", color=defects, color_continuous_scale='reds')
-        st.plotly_chart(fig, use_container_width=True)
-        
-        return prediction_result
-    
-    return None
+    def _extract_results(self):
+        """Extract solution results"""
+        params = self.parameters
+        S, T, R = params['S'], params['T'], params['R']
 
-def main():
-    create_header()
-    
-    if 'system' not in st.session_state:
-        st.session_state.system = IntegratedPredictionPlanningSystem()
-    if 'data' not in st.session_state:
-        st.session_state.data = None
-    if 'prediction_trained' not in st.session_state:
-        st.session_state.prediction_trained = False
-    if 'prediction_result' not in st.session_state:
-        st.session_state.prediction_result = None
-    
-    with st.sidebar:
-        st.header("🧭 Navigation")
-        
-        step = st.radio("Choose a step:", ["📊 1. Load Data", "🔮 2. Train Prediction", "🎯 3. Make Prediction"])
-        
-        st.markdown("---")
-        st.header("📋 Process Status")
-        
-        if st.session_state.data is not None:
-            st.success("✅ Data loaded")
-        else:
-            st.error("❌ No data")
-        
-        if st.session_state.prediction_trained:
-            st.success("✅ Models trained")
-        else:
-            st.error("❌ Not trained")
-        
-        if st.session_state.prediction_result is not None:
-            st.success("✅ Prediction done")
-        else:
-            st.error("❌ No prediction")
-        
-        if st.button("🔄 Restart", use_container_width=True):
-            for key in list(st.session_state.keys()):
-                del st.session_state[key]
-            st.rerun()
-    
-    if step == "📊 1. Load Data":
-        data = load_data_section()
-        if data is not None:
-            st.session_state.data = data
-    elif step == "🔮 2. Train Prediction":
-        if st.session_state.data is not None:
-            success = prediction_section(st.session_state.system, st.session_state.data)
-            if success:
-                st.session_state.prediction_trained = True
-        else:
-            st.warning("⚠️ Load data first")
-    elif step == "🎯 3. Make Prediction":
-        if st.session_state.prediction_trained:
-            prediction_result = new_prediction_section(st.session_state.system)
-            if prediction_result is not None:
-                st.session_state.prediction_result = prediction_result
-        else:
-            st.warning("⚠️ Train models first")
-    
-    st.markdown("---")
-    st.markdown("""
-    <div style='text-align: center; color: #666; padding: 20px;'>
-        <div style='color: #666; margin-top: 8px; font-size: 14px; font-style: italic;'>
-            Advanced Prediction-Planning System | v1.0 | © 2024
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+        production_results = {}
+        for s in range(S):
+            for i in R:
+                for t in range(T):
+                    key = (s, i, t)
+                    value = self.variables['q'][key].value()
+                    production_results[key] = value if value is not None else 0
 
-if __name__ == "__main__":
-    main()
-          
-    
- 
+        shortage_results = {}
+        for s in range(S):
+            for i in R:
+                key = (s, i)
+                value = self.variables['shortage'][key].value()
+                shortage_results[key] = value if value is not None else 0
+
+        sequencing_results = {}
+        for s in range(S):
+            for t in range(T):
+                sequence = {}
+                for i in R:
+                    for j in range(len(R)):
+                        key = (i, j, s, t)
+                        value = self.variables['x'][key].value()
+                        if value is not None and value > 0.5:
+                            sequence[j] = i
+                sequencing_results[(s, t)] = sequence
+
+        self.results = {
+            'production': production_results,
+            'shortage': shortage_results,
+            'sequencing': sequencing_results,
+            'total_cost': self.model.objective.value()
+        }
+
+    def analyze_scenarios_detailed(self):
+        """Detailed scenario analysis"""
+        if not self.results:
+            return
+
+        params = self.parameters
+        S, T, R = params['S'], params['T'], params['R']
+        production = self.results['production']
+        shortage = self.results['shortage']
+        sequencing = self.results['sequencing']
+
+        self.scenario_analysis = {}
+
+        for s in range(S):
+            scenario_data = {
+                'scenario_id': s + 1,
+                'shifts_details': {},
+                'production_summary': {},
+                'kpis': {}
+            }
+
+            total_capacity_used = 0
+            total_capacity_available = 0
+
+            for t in range(T):
+                shift_info = {
+                    'execution_order': [],
+                    'quantities': {},
+                    'capacity_used': 0,
+                    'capacity_available': params['CAPchaine'][(s, t)]
+                }
+
+                sequence = sequencing.get((s, t), {})
+                ordered_refs = []
+                for j in range(len(R)):
+                    ref = sequence.get(j, 'EMPTY')
+                    ordered_refs.append(ref)
+                shift_info['execution_order'] = ordered_refs
+
+                capacity_used = 0
+                for i in R:
+                    qty = production[(s, i, t)]
+                    if qty > 0:
+                        shift_info['quantities'][i] = qty
+                        defect_rate_i = params['defect_rate'][(s, i)]
+                        capacity_used += qty * (1 + params['beta'] * defect_rate_i)
+
+                shift_info['capacity_used'] = capacity_used
+                if shift_info['capacity_available'] > 0:
+                    shift_info['capacity_utilization'] = (capacity_used / shift_info['capacity_available']) * 100
+                else:
+                    shift_info['capacity_utilization'] = 0
+
+                total_capacity_used += capacity_used
+                total_capacity_available += shift_info['capacity_available']
+
+                scenario_data['shifts_details'][t+1] = shift_info
+
+            total_useful_production = 0
+            total_demand = sum(params['EDI'].values())
+            total_shortage = 0
+
+            for i in R:
+                total_prod = sum(production[(s, i, t)] for t in range(T))
+                
+                total_useful = 0
+                for t in range(T):
+                    qty = production[(s, i, t)]
+                    defect_rate_i = params['defect_rate'][(s, i)]
+                    good_pieces = qty * (1 - defect_rate_i)
+                    rework_ok = qty * defect_rate_i * params['alpha_rework']
+                    total_useful += good_pieces + rework_
