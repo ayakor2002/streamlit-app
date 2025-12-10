@@ -651,3 +651,4 @@ class StochasticPlanningModel:
                     good_pieces = qty * (1 - defect_rate_i)
                     rework_ok = qty * defect_rate_i * params['alpha_rework']
                     total_useful += good_pieces + rework_
+         
